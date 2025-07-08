@@ -111,31 +111,48 @@
             >
         </a>
 
+        <!-- Informations utilisateur et tournoi -->
+        <div id="auth-info" class="text-white text-sm text-center mb-4 hidden">
+            <p id="user-email" class="font-bold"></p>
+            <p id="current-tournament-name" class="text-xs italic mt-1"></p>
+            <button id="select-tournament-btn" class="bg-blue-700 text-white text-xs py-1 px-2 rounded-md mt-2 hover:bg-blue-800 transition duration-150">
+                Changer de tournoi
+            </button>
+            <button id="logout-btn" class="bg-red-500 text-white text-xs py-1 px-2 rounded-md mt-2 hover:bg-red-600 transition duration-150">
+                Déconnexion
+            </button>
+        </div>
+
         <!-- Liste de navigation avec icônes -->
-        <ul class="flex flex-col space-y-4 w-full">
+        <ul id="main-nav-links" class="flex flex-col space-y-4 w-full flex-grow">
             <li>
                 <a href="#home" class="nav-link text-white hover:text-blue-200 transition duration-150 px-3 py-2 rounded-md flex items-center space-x-2">
                     <i class="fas fa-home"></i> <span>Accueil</span>
                 </a>
             </li>
-            <li>
+            <li id="nav-equipes" class="hidden">
                 <a href="#equipes" class="nav-link text-white hover:text-blue-200 transition duration-150 px-3 py-2 rounded-md flex items-center space-x-2">
                     <i class="fas fa-users"></i> <span>Équipes</span>
                 </a>
             </li>
-            <li>
+            <li id="nav-brassages" class="hidden">
                 <a href="#brassages" class="nav-link text-white hover:text-blue-200 transition duration-150 px-3 py-2 rounded-md flex items-center space-x-2">
                     <i class="fas fa-layer-group"></i> <span>Brassages</span>
                 </a>
             </li>
-            <li>
+            <li id="nav-eliminatoires" class="hidden">
                 <a href="#eliminatoires" class="nav-link text-white hover:text-blue-200 transition duration-150 px-3 py-2 rounded-md flex items-center space-x-2">
                     <i class="fas fa-trophy"></i> <span>Éliminatoires</span>
                 </a>
             </li>
-            <li>
+            <li id="nav-classements" class="hidden">
                 <a href="#classements" class="nav-link text-white hover:text-blue-200 transition duration-150 px-3 py-2 rounded-md flex items-center space-x-2">
                     <i class="fas fa-list-ol"></i> <span>Classements</span>
+                </a>
+            </li>
+            <li id="nav-collaborators" class="hidden">
+                <a href="#collaborators" class="nav-link text-white hover:text-blue-200 transition duration-150 px-3 py-2 rounded-md flex items-center space-x-2">
+                    <i class="fas fa-handshake"></i> <span>Collaborateurs</span>
                 </a>
             </li>
         </ul>
@@ -181,8 +198,27 @@
     <script type="module">
         // Import des fonctions nécessaires du SDK Firebase
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
-        import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+        import {
+            getAuth,
+            onAuthStateChanged,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+        import {
+            getFirestore,
+            doc,
+            getDoc,
+            addDoc,
+            setDoc,
+            updateDoc,
+            deleteDoc,
+            onSnapshot,
+            collection,
+            query,
+            where,
+            getDocs
+        } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
         // Si vous n'utilisez pas Analytics, vous pouvez commenter ou supprimer la ligne suivante
         // import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-analytics.js";
 
@@ -200,94 +236,13 @@
 
         // Variables globales pour Firebase (seront initialisées après l'authentification)
         let app;
-        let db;
         let auth;
-        let userId; // Pour stocker l'ID de l'utilisateur
-
-        // Variables fournies par l'environnement Canvas (laissez-les telles quelles)
-        // Elles ne seront utilisées que si le code est exécuté dans Canvas
-        const appIdFromCanvas = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId; // Utilise projectId si pas dans Canvas
-        const initialAuthTokenFromCanvas = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        // Initialisation de Firebase et de l'authentification
-        function initializeFirebaseAndAuth() {
-            try {
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-
-                // Si vous utilisez Analytics, décommentez la ligne suivante
-                // const analytics = getAnalytics(app);
-
-                // Écouteur pour les changements d'état d'authentification
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        // L'utilisateur est connecté
-                        userId = user.uid;
-                        console.log("Firebase: Authentifié avec succès. User ID:", userId);
-                    } else {
-                        // L'utilisateur est déconnecté ou n'a jamais été connecté
-                        console.log("Firebase: Utilisateur non authentifié. Tentative de connexion anonyme...");
-                        try {
-                            if (initialAuthTokenFromCanvas) {
-                                // Tente de se connecter avec le token fourni par Canvas
-                                await signInWithCustomToken(auth, initialAuthTokenFromCanvas);
-                                console.log("Firebase: Connecté avec le token personnalisé.");
-                            } else {
-                                // Sinon, se connecte de manière anonyme
-                                await signInAnonymously(auth);
-                                console.log("Firebase: Connecté de manière anonyme.");
-                            }
-                            userId = auth.currentUser.uid;
-                        } catch (error) {
-                            console.error("Firebase: Erreur d'authentification:", error);
-                            // Fallback si l'authentification échoue, utiliser un ID aléatoire
-                            userId = crypto.randomUUID();
-                            console.warn("Firebase: Utilisation d'un ID utilisateur aléatoire en raison d'une erreur d'authentification.");
-                        }
-                    }
-                    // Rendre les fonctions Firebase globales pour le reste de votre script.js
-                    // C'est essentiel pour que votre script principal puisse interagir avec Firebase
-                    window.db = db;
-                    window.auth = auth;
-                    window.userId = userId;
-                    window.appId = appIdFromCanvas; // Utilise l'ID du projet ou celui de Canvas
-                    window.doc = doc;
-                    window.getDoc = getDoc;
-                    window.addDoc = addDoc;
-                    window.setDoc = setDoc;
-                    window.updateDoc = updateDoc;
-                    window.deleteDoc = deleteDoc;
-                    window.onSnapshot = onSnapshot;
-                    window.collection = collection;
-                    window.query = query;
-                    window.where = where;
-                    window.getDocs = getDocs;
-
-                    // Si votre script.js a une fonction de chargement de données qui doit être appelée
-                    // après l'initialisation complète de Firebase, c'est ici qu'elle devrait être déclenchée.
-                    // Dans votre cas, le script.js contient déjà un setInterval qui attend window.db et window.userId.
-                });
-
-            } catch (error) {
-                console.error("Firebase: Erreur lors de l'initialisation de Firebase:", error);
-                // En cas d'échec d'initialisation, utiliser un ID utilisateur aléatoire
-                userId = crypto.randomUUID();
-                window.userId = userId;
-                window.appId = appIdFromCanvas;
-            }
-        }
-
-        // Appeler l'initialisation de Firebase lorsque le DOM est chargé
-        // ou immédiatement si le DOM est déjà chargé
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initializeFirebaseAndAuth);
-        } else {
-            initializeFirebaseAndAuth();
-        }
+        let db;
+        let currentFirebaseUser = null; // L'objet utilisateur Firebase authentifié
+        let userId = null; // L'UID de l'utilisateur
+        let appId = null; // L'ID de l'application Firebase (projectId)
 
         // Expose Firebase functions globally as placeholders initially
-        // These will be properly set in onAuthStateChanged once Firebase is ready.
         window.db = null;
         window.auth = null;
         window.userId = null;
@@ -303,7 +258,84 @@
         window.query = null;
         window.where = null;
         window.getDocs = null;
+        // Expose Auth functions
+        window.createUserWithEmailAndPassword = null;
+        window.signInWithEmailAndPassword = null;
+        window.signOut = null;
 
+
+        // Initialisation de Firebase et de l'authentification
+        function initializeFirebaseAndAuth() {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Si vous utilisez Analytics, décommentez la ligne suivante
+                // const analytics = getAnalytics(app);
+
+                // Rendre les fonctions Firebase globales pour le reste de votre script.js
+                window.db = db;
+                window.auth = auth;
+                window.appId = firebaseConfig.projectId; // Utilise projectId comme appId pour Firestore
+                window.doc = doc;
+                window.getDoc = getDoc;
+                window.addDoc = addDoc;
+                window.setDoc = setDoc;
+                window.updateDoc = updateDoc;
+                window.deleteDoc = deleteDoc;
+                window.onSnapshot = onSnapshot;
+                window.collection = collection;
+                window.query = query;
+                window.where = where;
+                window.getDocs = getDocs;
+                // Expose Auth functions
+                window.createUserWithEmailAndPassword = createUserWithEmailAndPassword;
+                window.signInWithEmailAndPassword = signInWithEmailAndPassword;
+                window.signOut = signOut;
+
+                // Écouteur pour les changements d'état d'authentification
+                onAuthStateChanged(auth, (user) => {
+                    currentFirebaseUser = user;
+                    if (user) {
+                        userId = user.uid;
+                        window.userId = user.uid;
+                        console.log("Firebase: Authentifié avec succès. User ID:", userId, "Email:", user.email);
+                        // Charger les données du tournoi pour l'utilisateur connecté
+                        // loadAllData() sera appelée par le script principal après que les variables globales soient prêtes.
+                    } else {
+                        userId = null;
+                        window.userId = null;
+                        console.log("Firebase: Utilisateur déconnecté.");
+                    }
+                    // Déclencher la logique de l'application après que l'état d'authentification soit connu
+                    // Cela inclut le chargement des données si l'utilisateur est connecté
+                    if (typeof window.onFirebaseReady === 'function') {
+                        window.onFirebaseReady();
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase: Erreur lors de l'initialisation de Firebase:", error);
+                // En cas d'échec d'initialisation, définir les variables globales comme null
+                window.db = null;
+                window.auth = null;
+                window.userId = null;
+                window.appId = firebaseConfig.projectId; // Toujours définir l'appId
+                // Si votre script.js a une fonction de chargement de données qui doit être appelée
+                // après l'initialisation complète de Firebase, c'est ici qu'elle devrait être déclenchée.
+                if (typeof window.onFirebaseReady === 'function') {
+                    window.onFirebaseReady();
+                }
+            }
+        }
+
+        // Appeler l'initialisation de Firebase lorsque le DOM est chargé
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeFirebaseAndAuth);
+        } else {
+            initializeFirebaseAndAuth();
+        }
     </script>
     <!-- XLSX library for Excel import/export -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
