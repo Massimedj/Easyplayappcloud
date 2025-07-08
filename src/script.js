@@ -2,26 +2,33 @@
     // --- Constantes et Variables Globales ---
     const APP_CONTAINER = document.getElementById('app-container');
 
-    // Les clés localStorage sont supprimées car nous utilisons Firestore pour la persistance des données
-    // const TEAM_DATA_KEY = 'volleyTeamsData';
-    // const BRASSAGE_PHASES_KEY = 'volleyBrassagePhases';
-    // const ELIMINATION_PHASES_KEY = 'volleyEliminationPhases';
-    // const SECONDARY_GROUPS_SELECTION_KEY = 'volleySecondaryGroupsSelection';
-    // const POOL_GENERATION_BASIS_KEY = 'volleyPoolGenerationBasis';
-    // const SECONDARY_GROUPS_PREVIEW_KEY = 'volleySecondaryGroupsPreview';
-    // const ELIMINATED_TEAMS_KEY = 'volleyEliminatedTeams';
+    // Les clés de localStorage sont conservées comme constantes, mais ne sont plus utilisées pour la persistance.
+    // La persistance est maintenant gérée par Firestore.
+    const TEAM_DATA_KEY = 'volleyTeamsData'; // Non utilisé pour Firestore
+    const BRASSAGE_PHASES_KEY = 'volleyBrassagePhases'; // Non utilisé pour Firestore
+    const ELIMINATION_PHASES_KEY = 'volleyEliminationPhases'; // Non utilisé pour Firestore
+    const SECONDARY_GROUPS_SELECTION_KEY = 'volleySecondaryGroupsSelection'; // Non utilisé pour Firestore
+    const POOL_GENERATION_BASIS_KEY = 'volleyPoolGenerationBasis'; // Non utilisé pour Firestore
+    const SECONDARY_GROUPS_PREVIEW_KEY = 'volleySecondaryGroupsPreview'; // Non utilisé pour Firestore
+    const ELIMINATED_TEAMS_KEY = 'volleyEliminatedTeams'; // Non utilisé pour Firestore
 
     const PHASE_TYPE_INITIAL = 'initial_brassage';
     const PHASE_TYPE_SECONDARY_BRASSAGE = 'secondary_brassage';
     const PHASE_TYPE_ELIMINATION_SEEDING = 'elimination_seeding'; // Phase spéciale pour le regroupement éliminatoire
 
+    // Données du tournoi (chargées du tournoi actif)
     let allTeams = [];
     let allBrassagePhases = [];
     let eliminationPhases = {};
-    let currentSecondaryGroupsPreview = {}; // Pour la prévisualisation des groupes secondaires, maintenant persistant
-    let eliminatedTeams = new Set(); // Set pour stocker les IDs des équipes éliminées
+    let currentSecondaryGroupsPreview = {};
+    let eliminatedTeams = new Set();
 
     let currentDisplayedPhaseId = null; // ID de la phase de brassage actuellement affichée
+
+    // Variables pour la gestion des tournois et de l'utilisateur
+    let currentTournamentId = null; // ID du tournoi actuellement sélectionné/actif
+    let currentTournamentData = null; // Données complètes du tournoi actif (pour ownerId, collaborators)
+    let allUserTournaments = []; // Liste des tournois auxquels l'utilisateur a accès
 
     // Map pour suivre les occurrences de matchs dans les différentes phases
     // Clé: chaîne canonique représentant la paire d'équipes (ex: "team1_id-team2_id" triée)
@@ -33,7 +40,21 @@
     const modalTitle = document.getElementById('modalTitle');
     const modalBody = document.getElementById('modalBody');
     const modalCancelBtn = document.getElementById('modalCancelBtn');
-    let modalConfirmBtn = document.getElementById('modalConfirmBtn'); // CORRECTION: Utilisez 'let' ici
+    let modalConfirmBtn = document.getElementById('modalConfirmBtn');
+
+    // --- Cache des éléments DOM de la navigation et de l'authentification ---
+    const authInfoDiv = document.getElementById('auth-info');
+    const userEmailSpan = document.getElementById('user-email');
+    const currentTournamentNameSpan = document.getElementById('current-tournament-name');
+    const selectTournamentBtn = document.getElementById('select-tournament-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const navLinks = {
+        equipes: document.getElementById('nav-equipes'),
+        brassages: document.getElementById('nav-brassages'),
+        eliminatoires: document.getElementById('nav-eliminatoires'),
+        classements: document.getElementById('nav-classements'),
+        collaborators: document.getElementById('nav-collaborators')
+    };
 
     // --- Fonctions Utilitaires ---
 
@@ -53,29 +74,61 @@
             '`': '&#96;',
             '$': '&#36;'
         };
-
         return s.replace(/[&<>"'`$]/g, function(m) { return map[m]; });
     }
 
     /**
-     * Affiche un message temporaire à l'utilisateur.
-     * @param {HTMLElement} element L'élément DOM où afficher le message.
-     * @param {string} message Le message à afficher.
-     * @param {boolean} isError Indique si le message est une erreur (couleur rouge).
+     * Affiche un message temporaire (toast) à l'utilisateur.
+     * @param {string} message - Le message à afficher.
+     * @param {string} type - Le type de message ('success', 'error', 'info').
      */
-    function showMessage(element, message, isError = false) {
-        if (element) {
-            element.textContent = message;
-            element.className = `mt-3 text-sm text-center ${isError ? 'text-red-500' : 'text-green-500'}`;
-            setTimeout(() => {
-                if (element) {
-                    element.textContent = '';
-                    element.className = 'mt-3 text-sm text-center';
-                }
-            }, 5000);
-        } else {
-            console.error("ERREUR: Tentative d'affichage d'un message, mais l'élément cible est nul ou indéfini:", message);
+    function showToast(message, type = 'info') {
+        let toastContainer = document.getElementById('toast-container');
+        if (!toastContainer) {
+            toastContainer = document.createElement('div');
+            toastContainer.id = 'toast-container';
+            toastContainer.className = 'fixed top-4 right-4 z-[100] flex flex-col space-y-2';
+            document.body.appendChild(toastContainer);
         }
+
+        const toast = document.createElement('div');
+        toast.className = `p-4 rounded-lg shadow-md text-white flex items-center space-x-2 transition-opacity duration-300 ease-out opacity-0`;
+
+        let bgColor = '';
+        let icon = '';
+        switch (type) {
+            case 'success':
+                bgColor = 'bg-green-500';
+                icon = '<i class="fas fa-check-circle"></i>';
+                break;
+            case 'error':
+                bgColor = 'bg-red-500';
+                icon = '<i class="fas fa-times-circle"></i>';
+                break;
+            case 'info':
+            default:
+                bgColor = 'bg-blue-500';
+                icon = '<i class="fas fa-info-circle"></i>';
+                break;
+        }
+
+        toast.classList.add(bgColor);
+        toast.innerHTML = `${icon} <span>${message}</span>`;
+
+        toastContainer.appendChild(toast);
+
+        // Animate in
+        setTimeout(() => {
+            toast.classList.remove('opacity-0');
+            toast.classList.add('opacity-100');
+        }, 10);
+
+        // Animate out and remove
+        setTimeout(() => {
+            toast.classList.remove('opacity-100');
+            toast.classList.add('opacity-0');
+            toast.addEventListener('transitionend', () => toast.remove());
+        }, 3000);
     }
 
     /**
@@ -91,6 +144,12 @@
         modalBody.appendChild(bodyContent);
         actionModal.classList.remove('hidden');
 
+        // Réaffecter modalConfirmBtn pour s'assurer que les anciens écouteurs sont retirés
+        const oldConfirmBtn = modalConfirmBtn;
+        const newConfirmBtn = oldConfirmBtn.cloneNode(true);
+        oldConfirmBtn.parentNode.replaceChild(newConfirmBtn, oldConfirmBtn);
+        modalConfirmBtn = newConfirmBtn; // Met à jour la référence
+
         if (isDelete) {
             modalConfirmBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700', 'focus:ring-blue-500');
             modalConfirmBtn.classList.add('bg-red-600', 'hover:bg-red-700', 'focus:ring-red-500');
@@ -99,7 +158,6 @@
             modalConfirmBtn.classList.add('bg-blue-600', 'hover:bg-blue-700', 'focus:ring-blue-500');
         }
 
-        // Directement assigner onclick handler. Cela écrasera tout gestionnaire précédent.
         modalConfirmBtn.onclick = () => {
             confirmCallback(); // Exécuter la logique de confirmation spécifique
             hideModal(); // Puis masquer la modale
@@ -136,124 +194,632 @@
     // --- Fonctions de Persistance (Firestore) ---
 
     /**
-     * Chemin du document Firestore pour les données du tournoi de l'utilisateur.
+     * Référence au document Firestore pour les données privées de l'utilisateur (ex: tournoi actif).
      * @returns {import("https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js").DocumentReference|null} La référence du document ou null si Firebase n'est pas prêt.
      */
-    function getUserTournamentDocRef() {
+    function getUserPrivateDataRef() {
         if (window.db && window.userId && window.appId) {
-            return window.doc(window.db, 'artifacts', window.appId, 'users', window.userId, 'tournamentData', 'currentTournament');
+            return window.doc(window.db, 'artifacts', window.appId, 'users', window.userId, 'privateData', 'activeTournament');
         }
-        console.error("Firebase ou User ID non initialisé. Impossible d'obtenir la référence du document.");
+        console.error("Firebase, User ID ou App ID non initialisé pour les données privées.");
         return null;
     }
 
     /**
-     * Sauvegarde toutes les données du tournoi dans Firestore.
+     * Référence au document Firestore pour un tournoi spécifique.
+     * @param {string} tournamentId L'ID du tournoi.
+     * @returns {import("https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js").DocumentReference|null} La référence du document ou null si Firebase n'est pas prêt.
+     */
+    function getTournamentDataRef(tournamentId) {
+        if (window.db && tournamentId) {
+            return window.doc(window.db, 'tournaments', tournamentId);
+        }
+        console.error("Firebase ou Tournament ID non initialisé pour les données du tournoi.");
+        return null;
+    }
+
+    /**
+     * Sauvegarde toutes les données du tournoi actif dans Firestore.
      * Cette fonction est appelée chaque fois que des données sont modifiées.
      */
-    async function saveAllDataToFirestore() {
-        const docRef = getUserTournamentDocRef();
-        if (!docRef) {
-            showMessage(document.getElementById('message') || APP_CONTAINER, "Erreur: Impossible de sauvegarder les données, Firebase non prêt.", true);
+    async function saveAllData() {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour sauvegarder les données.", "error");
+            return;
+        }
+        if (!currentTournamentId) {
+            showToast("Aucun tournoi sélectionné. Veuillez créer ou sélectionner un tournoi d'abord.", "error");
+            return;
+        }
+
+        const tournamentDocRef = getTournamentDataRef(currentTournamentId);
+        if (!tournamentDocRef) {
+            showToast("Erreur: Impossible de sauvegarder les données, référence au tournoi non valide.", "error");
             return;
         }
 
         try {
             const dataToSave = {
+                // Métadonnées du tournoi (ne pas écraser si déjà définies, sauf si l'on veut les rendre éditables)
+                // Pour l'instant, on les reprend de currentTournamentData pour s'assurer qu'elles sont là.
+                name: currentTournamentData.name,
+                date: currentTournamentData.date,
+                numTeamsAllowed: currentTournamentData.numTeamsAllowed,
+                ownerId: currentTournamentData.ownerId,
+                collaboratorIds: currentTournamentData.collaboratorIds || [], // Assurez-vous que c'est un tableau
+                collaboratorEmails: currentTournamentData.collaboratorEmails || [], // Assurez-vous que c'est un tableau
+
+                // Données spécifiques au tournoi
                 allTeams: allTeams,
                 allBrassagePhases: allBrassagePhases,
                 eliminationPhases: eliminationPhases,
                 currentSecondaryGroupsPreview: currentSecondaryGroupsPreview,
-                // Convertir le Set en Array pour le stockage Firestore
-                eliminatedTeams: Array.from(eliminatedTeams),
-                currentDisplayedPhaseId: currentDisplayedPhaseId,
-                // Sauvegarder les paramètres de la page Brassages
-                poolGenerationBasis: localStorage.getItem('volleyPoolGenerationBasis') || 'initialLevels',
-                teamsPerPoolSetting: localStorage.getItem('volleyTeamsPerPoolSetting') || '3',
-                secondaryGroupsSelection: localStorage.getItem('volleySecondaryGroupsSelection') || '2'
+                eliminatedTeams: Array.from(eliminatedTeams), // Convertir le Set en Array
+                currentDisplayedPhaseId: currentDisplayedPhaseId
             };
-            await window.setDoc(docRef, dataToSave);
-            console.log("Données sauvegardées avec succès dans Firestore.");
-            // showMessage(document.getElementById('message') || APP_CONTAINER, "Données sauvegardées.", false); // Peut être trop fréquent
+            await window.setDoc(tournamentDocRef, dataToSave);
+            console.log("Données du tournoi sauvegardées avec succès dans Firestore:", currentTournamentId);
+            // showToast("Données sauvegardées.", "success"); // Peut être trop fréquent
         } catch (e) {
-            console.error("Erreur lors de la sauvegarde des données dans Firestore:", e);
-            showMessage(document.getElementById('message') || APP_CONTAINER, "Erreur lors de la sauvegarde des données.", true);
+            console.error("Erreur lors de la sauvegarde des données du tournoi dans Firestore:", e);
+            showToast("Erreur lors de la sauvegarde des données du tournoi.", "error");
         }
     }
 
     /**
-     * Charge toutes les données du tournoi depuis Firestore.
+     * Charge toutes les données du tournoi actif depuis Firestore.
      * Met également en place un listener en temps réel.
      */
     async function loadAllData() {
-        const docRef = getUserTournamentDocRef();
-        if (!docRef) {
-            console.warn("Firebase non prêt lors du chargement des données. Tentative de réessai...");
+        if (!window.userId) {
+            console.log("Utilisateur non connecté, impossible de charger les données du tournoi.");
+            updateUIForAuthStatus(); // Mettre à jour l'UI pour l'état non connecté
             return;
         }
 
-        // Mettre en place un listener en temps réel
-        window.onSnapshot(docRef, (docSnap) => {
-            if (docSnap.exists()) {
-                const data = docSnap.data();
-                allTeams = data.allTeams || [];
-                allBrassagePhases = data.allBrassagePhases || [];
-                eliminationPhases = data.eliminationPhases || {};
-                currentSecondaryGroupsPreview = data.currentSecondaryGroupsPreview || {};
-                // Convertir l'Array en Set lors du chargement
-                eliminatedTeams = new Set(data.eliminatedTeams || []);
-                currentDisplayedPhaseId = data.currentDisplayedPhaseId || null;
+        const userPrivateDataRef = getUserPrivateDataRef();
+        if (!userPrivateDataRef) {
+            showToast("Erreur: Impossible de charger les données, Firebase non prêt.", "error");
+            return;
+        }
 
-                // Charger les paramètres depuis Firestore (qui étaient stockés dans localStorage)
-                localStorage.setItem('volleyPoolGenerationBasis', data.poolGenerationBasis || 'initialLevels');
-                localStorage.setItem('volleyTeamsPerPoolSetting', data.teamsPerPoolSetting || '3');
-                localStorage.setItem('volleySecondaryGroupsSelection', data.secondaryGroupsSelection || '2');
-
-                console.log("Données chargées ou mises à jour depuis Firestore.");
-
-                // Reconstruire matchOccurrenceMap après le chargement des phases
-                rebuildMatchOccurrenceMap();
-
-                // Rendre la page après le chargement initial des données
-                // ou après une mise à jour en temps réel
-                handleLocationHash();
+        // Étape 1: Charger l'ID du tournoi actif de l'utilisateur
+        window.onSnapshot(userPrivateDataRef, async (docSnap) => {
+            if (docSnap.exists() && docSnap.data().activeTournamentId) {
+                const activeTournamentIdFromUser = docSnap.data().activeTournamentId;
+                if (currentTournamentId !== activeTournamentIdFromUser) {
+                    console.log("Nouveau tournoi actif détecté:", activeTournamentIdFromUser);
+                    currentTournamentId = activeTournamentIdFromUser;
+                    await fetchAndListenToTournamentData(currentTournamentId);
+                } else {
+                    console.log("Tournoi actif inchangé:", currentTournamentId);
+                    // Si le tournoi est le même, on ne refetch pas, on attend la mise à jour du listener du tournoi.
+                }
             } else {
-                console.log("Aucune donnée trouvée dans Firestore. Initialisation des données par défaut.");
-                // Si aucune donnée n'existe, on peut initialiser avec des valeurs par défaut
-                // et les sauvegarder pour créer le document.
+                console.log("Aucun tournoi actif enregistré pour cet utilisateur ou document inexistant.");
+                currentTournamentId = null;
+                currentTournamentData = null;
+                // Réinitialiser les données locales si aucun tournoi actif
                 allTeams = [];
                 allBrassagePhases = [];
                 eliminationPhases = {};
                 currentSecondaryGroupsPreview = {};
                 eliminatedTeams = new Set();
                 currentDisplayedPhaseId = null;
-                matchOccurrenceMap = new Map(); // S'assurer qu'elle est réinitialisée aussi
-                saveAllDataToFirestore(); // Crée le document initial dans Firestore
-                handleLocationHash(); // Rendre la page vide
+                rebuildMatchOccurrenceMap(); // Assurez-vous que la map est vide
+                updateTournamentDisplay(); // Mettre à jour l'UI (nom du tournoi vide)
+                handleLocationHash(); // Rediriger vers le tableau de bord des tournois
             }
         }, (error) => {
-            console.error("Erreur lors de l'écoute des données Firestore:", error);
-            showMessage(document.getElementById('message') || APP_CONTAINER, "Erreur de synchronisation des données.", true);
+            console.error("Erreur lors de l'écoute des données privées de l'utilisateur:", error);
+            showToast("Erreur de synchronisation des données utilisateur.", "error");
+        });
+
+        // Étape 2: Charger la liste de TOUS les tournois de l'utilisateur (pour le tableau de bord)
+        await fetchUserTournamentsList();
+    }
+
+    /**
+     * Récupère et met en place un listener pour les données d'un tournoi spécifique.
+     * @param {string} tournamentId L'ID du tournoi à charger.
+     */
+    async function fetchAndListenToTournamentData(tournamentId) {
+        if (!tournamentId) {
+            console.warn("Tentative de charger un tournoi avec un ID vide.");
+            return;
+        }
+
+        const tournamentDocRef = getTournamentDataRef(tournamentId);
+        if (!tournamentDocRef) {
+            showToast("Erreur: Impossible de charger le tournoi, référence non valide.", "error");
+            return;
+        }
+
+        // Détacher l'ancien listener si existant
+        if (window.currentTournamentUnsubscribe) {
+            window.currentTournamentUnsubscribe();
+            console.log("Ancien listener de tournoi détaché.");
+        }
+
+        // Mettre en place un nouveau listener pour le tournoi sélectionné
+        window.currentTournamentUnsubscribe = window.onSnapshot(tournamentDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                currentTournamentData = data; // Stocker les métadonnées du tournoi
+                allTeams = data.allTeams || [];
+                allBrassagePhases = data.allBrassagePhases || [];
+                eliminationPhases = data.eliminationPhases || {};
+                currentSecondaryGroupsPreview = data.currentSecondaryGroupsPreview || {};
+                eliminatedTeams = new Set(data.eliminatedTeams || []);
+                currentDisplayedPhaseId = data.currentDisplayedPhaseId || null;
+
+                console.log("Données du tournoi chargées/mises à jour:", tournamentId);
+                rebuildMatchOccurrenceMap();
+                updateTournamentDisplay(); // Mettre à jour l'UI avec le nom du tournoi
+                handleLocationHash(); // Rendre la page actuelle (ou rediriger si nécessaire)
+            } else {
+                console.warn(`Le tournoi ${tournamentId} n'existe plus ou l'accès est refusé.`);
+                showToast(`Le tournoi "${tournamentId}" n'existe plus ou l'accès est refusé.`, "error");
+                // Si le tournoi n'existe plus, on le désélectionne
+                currentTournamentId = null;
+                currentTournamentData = null;
+                // Effacer l'ID du tournoi actif des données privées de l'utilisateur
+                const userPrivateDataRef = getUserPrivateDataRef();
+                if (userPrivateDataRef) {
+                    window.setDoc(userPrivateDataRef, { activeTournamentId: null }, { merge: true });
+                }
+                handleLocationHash(); // Rediriger vers le tableau de bord des tournois
+            }
+        }, (error) => {
+            console.error("Erreur lors de l'écoute des données du tournoi:", error);
+            showToast("Erreur de synchronisation des données du tournoi.", "error");
         });
     }
 
     /**
-     * Rebuilds the match occurrence map.
-     * This helps track which team pairs have played in which phases.
+     * Récupère la liste de tous les tournois de l'utilisateur (propriétaire ou collaborateur).
      */
-    function rebuildMatchOccurrenceMap(phasesToEvaluate = allBrassagePhases) {
-        matchOccurrenceMap = new Map(); // Reset the map
-        phasesToEvaluate.forEach(phase => {
-            // Only include actual brassage phases (initial and secondary)
-            if ((phase.type === PHASE_TYPE_INITIAL || phase.type === PHASE_TYPE_SECONDARY_BRASSAGE) && phase.generated && phase.pools) {
+    async function fetchUserTournamentsList() {
+        if (!window.userId || !window.db) {
+            console.warn("Firebase ou User ID non prêt pour récupérer la liste des tournois.");
+            allUserTournaments = [];
+            return;
+        }
+
+        try {
+            const tournamentsCollectionRef = window.collection(window.db, 'tournaments');
+            const ownerQuery = window.query(tournamentsCollectionRef, window.where('ownerId', '==', window.userId));
+            const collaboratorQuery = window.query(tournamentsCollectionRef, window.where('collaboratorIds', 'array-contains', window.userId));
+
+            const [ownerSnapshot, collaboratorSnapshot] = await Promise.all([
+                window.getDocs(ownerQuery),
+                window.getDocs(collaboratorQuery)
+            ]);
+
+            const ownerTournaments = ownerSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const collaboratorTournaments = collaboratorSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+            // Fusionner et dédupliquer les tournois
+            const allTournamentsMap = new Map();
+            ownerTournaments.forEach(t => allTournamentsMap.set(t.id, t));
+            collaboratorTournaments.forEach(t => allTournamentsMap.set(t.id, t));
+
+            allUserTournaments = Array.from(allTournamentsMap.values());
+            console.log("Liste des tournois de l'utilisateur mise à jour:", allUserTournaments.length);
+
+            // Si l'utilisateur n'a pas de tournoi actif mais en a dans sa liste, on peut en sélectionner un par défaut
+            if (!currentTournamentId && allUserTournaments.length > 0) {
+                // Tenter de charger le premier tournoi de la liste comme tournoi actif
+                await selectTournament(allUserTournaments[0].id);
+            } else if (!currentTournamentId && allUserTournaments.length === 0) {
+                // Si aucun tournoi et aucun tournoi actif, rediriger vers le tableau de bord des tournois
+                handleLocationHash(); // Cela appellera renderTournamentDashboard si le hash est vide ou #tournaments
+            }
+        } catch (error) {
+            console.error("Erreur lors de la récupération de la liste des tournois:", error);
+            showToast("Erreur lors du chargement de la liste de vos tournois.", "error");
+            allUserTournaments = [];
+        }
+    }
+
+    /**
+     * Sélectionne un tournoi comme tournoi actif pour l'utilisateur.
+     * @param {string} tournamentId L'ID du tournoi à activer.
+     */
+    async function selectTournament(tournamentId) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour sélectionner un tournoi.", "error");
+            return;
+        }
+        if (currentTournamentId === tournamentId) {
+            showToast("Ce tournoi est déjà sélectionné.", "info");
+            return;
+        }
+
+        const userPrivateDataRef = getUserPrivateDataRef();
+        if (!userPrivateDataRef) {
+            showToast("Erreur: Impossible de sélectionner le tournoi, Firebase non prêt.", "error");
+            return;
+        }
+
+        try {
+            await window.setDoc(userPrivateDataRef, { activeTournamentId: tournamentId }, { merge: true });
+            console.log(`Tournoi ${tournamentId} défini comme actif.`);
+            // loadAllData() sera déclenché par le listener sur userPrivateDataRef
+            showToast("Tournoi sélectionné avec succès !", "success");
+            window.location.hash = '#home'; // Rediriger vers l'accueil du tournoi
+        } catch (error) {
+            console.error("Erreur lors de la définition du tournoi actif:", error);
+            showToast("Erreur lors de la sélection du tournoi.", "error");
+        }
+    }
+
+    /**
+     * Crée un nouveau tournoi.
+     * @param {string} name Nom du tournoi.
+     * @param {string} date Date du tournoi.
+     * @param {number} numTeams Nombre d'équipes du tournoi.
+     */
+    async function createNewTournament(name, date, numTeams) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour créer un tournoi.", "error");
+            return;
+        }
+
+        if (!name.trim() || !date || isNaN(numTeams) || numTeams <= 0) {
+            showToast("Veuillez remplir tous les champs du tournoi (Nom, Date, Nombre d'équipes).", "error");
+            return;
+        }
+
+        try {
+            const newTournamentDocRef = window.doc(window.collection(window.db, 'tournaments')); // Firestore générera un ID
+            const newTournamentId = newTournamentDocRef.id;
+
+            const initialTournamentData = {
+                name: name.trim(),
+                date: date,
+                numTeamsAllowed: numTeams,
+                ownerId: window.userId,
+                collaboratorIds: [], // Initialement vide
+                collaboratorEmails: [], // Pour affichage/gestion, pas pour les règles de sécurité
+                createdAt: window.serverTimestamp ? window.serverTimestamp() : Date.now(), // Utiliser serverTimestamp si disponible
+                // Initialiser les données du tournoi avec des valeurs vides
+                allTeams: [],
+                allBrassagePhases: [],
+                eliminationPhases: {},
+                currentSecondaryGroupsPreview: {},
+                eliminatedTeams: [],
+                currentDisplayedPhaseId: null
+            };
+
+            await window.setDoc(newTournamentDocRef, initialTournamentData);
+            console.log("Nouveau tournoi créé avec ID:", newTournamentId);
+            showToast("Tournoi créé avec succès !", "success");
+
+            // Définir ce nouveau tournoi comme le tournoi actif de l'utilisateur
+            await selectTournament(newTournamentId);
+            // fetchUserTournamentsList() sera appelé par le listener de userPrivateDataRef
+            // handleLocationHash() sera appelé après le chargement du tournoi
+        } catch (error) {
+            console.error("Erreur lors de la création du tournoi:", error);
+            showToast("Erreur lors de la création du tournoi.", "error");
+        }
+    }
+
+    /**
+     * Supprime un tournoi. Seul le propriétaire peut le faire.
+     * @param {string} tournamentId L'ID du tournoi à supprimer.
+     */
+    async function deleteTournament(tournamentId) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour supprimer un tournoi.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible de supprimer le tournoi, référence non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas le supprimer.", "error");
+                return;
+            }
+
+            const messageContent = document.createElement('p');
+            messageContent.textContent = `Êtes-vous sûr de vouloir supprimer le tournoi "${escapeHtml(data.name)}" ? Cette action est irréversible.`;
+            messageContent.className = 'text-gray-700';
+
+            showModal('Confirmer la suppression du tournoi', messageContent, async () => {
+                await window.deleteDoc(tournamentRef);
+                showToast(`Tournoi "${escapeHtml(data.name)}" supprimé.`, "success");
+
+                // Si le tournoi supprimé était le tournoi actif, le désélectionner
+                if (currentTournamentId === tournamentId) {
+                    currentTournamentId = null;
+                    currentTournamentData = null;
+                    const userPrivateDataRef = getUserPrivateDataRef();
+                    if (userPrivateDataRef) {
+                        await window.setDoc(userPrivateDataRef, { activeTournamentId: null }, { merge: true });
+                    }
+                }
+                // La liste des tournois sera mise à jour par fetchUserTournamentsList via onSnapshot
+                // handleLocationHash() sera appelé après la mise à jour de la liste
+            }, true); // Bouton rouge pour la suppression
+        } catch (error) {
+            console.error("Erreur lors de la suppression du tournoi:", error);
+            showToast("Erreur lors de la suppression du tournoi.", "error");
+        }
+    }
+
+    /**
+     * Ajoute un collaborateur à un tournoi par son UID.
+     * Cette fonction est celle qui respecte les règles de sécurité Firestore.
+     * @param {string} tournamentId L'ID du tournoi.
+     * @param {string} collaboratorUid L'UID du collaborateur à ajouter.
+     */
+    async function addCollaboratorByUid(tournamentId, collaboratorUid) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour ajouter un collaborateur.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible d'ajouter un collaborateur, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas ajouter de collaborateurs.", "error");
+                return;
+            }
+
+            let currentCollaboratorIds = data.collaboratorIds || [];
+            if (currentCollaboratorIds.includes(collaboratorUid)) {
+                showToast("Cet UID est déjà un collaborateur.", "info");
+                return;
+            }
+
+            currentCollaboratorIds.push(collaboratorUid);
+            await window.updateDoc(tournamentRef, {
+                collaboratorIds: currentCollaboratorIds
+            });
+            showToast(`Collaborateur (UID: ${collaboratorUid}) ajouté avec succès !`, "success");
+            // Le rendu sera mis à jour par le listener du tournoi
+        } catch (error) {
+            console.error("Erreur lors de l'ajout du collaborateur par UID:", error);
+            showToast("Erreur lors de l'ajout du collaborateur.", "error");
+        }
+    }
+
+    /**
+     * Ajoute un collaborateur à un tournoi par son email (pour affichage/gestion, pas pour sécurité directe).
+     * @param {string} tournamentId L'ID du tournoi.
+     * @param {string} collaboratorEmail L'email du collaborateur à ajouter.
+     */
+    async function addCollaboratorByEmailForDisplay(tournamentId, collaboratorEmail) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour ajouter un collaborateur.", "error");
+            return;
+        }
+        if (!collaboratorEmail.trim()) {
+            showToast("L'adresse e-mail ne peut pas être vide.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible d'ajouter un collaborateur, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas ajouter de collaborateurs.", "error");
+                return;
+            }
+
+            let currentCollaboratorEmails = data.collaboratorEmails || [];
+            if (currentCollaboratorEmails.includes(collaboratorEmail.trim())) {
+                showToast("Cette adresse e-mail est déjà dans la liste des collaborateurs.", "info");
+                return;
+            }
+            if (data.ownerId === window.userId && window.auth.currentUser.email === collaboratorEmail.trim()) {
+                 showToast("Vous êtes déjà le propriétaire de ce tournoi.", "info");
+                 return;
+            }
+
+            currentCollaboratorEmails.push(collaboratorEmail.trim());
+            await window.updateDoc(tournamentRef, {
+                collaboratorEmails: currentCollaboratorEmails
+            });
+            showToast(`Adresse e-mail "${escapeHtml(collaboratorEmail)}" ajoutée à la liste des collaborateurs.`, "success");
+            showToast("Rappel: Pour un accès réel, l'UID de cet utilisateur doit être ajouté aux règles de sécurité via une fonction backend.", "info", 5000);
+            // Le rendu sera mis à jour par le listener du tournoi
+        } catch (error) {
+            console.error("Erreur lors de l'ajout du collaborateur par email:", error);
+            showToast("Erreur lors de l'ajout du collaborateur par email.", "error");
+        }
+    }
+
+    /**
+     * Supprime un collaborateur d'un tournoi par son UID.
+     * @param {string} tournamentId L'ID du tournoi.
+     * @param {string} collaboratorUid L'UID du collaborateur à supprimer.
+     */
+    async function removeCollaboratorByUid(tournamentId, collaboratorUid) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour gérer les collaborateurs.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible de supprimer le collaborateur, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas supprimer de collaborateurs.", "error");
+                return;
+            }
+            if (collaboratorUid === window.userId) {
+                showToast("Vous ne pouvez pas vous retirer vous-même en tant que propriétaire.", "error");
+                return;
+            }
+
+            let currentCollaboratorIds = data.collaboratorIds || [];
+            const updatedCollaboratorIds = currentCollaboratorIds.filter(uid => uid !== collaboratorUid);
+
+            if (updatedCollaboratorIds.length === currentCollaboratorIds.length) {
+                showToast("Cet UID n'est pas un collaborateur de ce tournoi.", "info");
+                return;
+            }
+
+            await window.updateDoc(tournamentRef, {
+                collaboratorIds: updatedCollaboratorIds
+            });
+            showToast(`Collaborateur (UID: ${collaboratorUid}) supprimé.`, "success");
+            // Le rendu sera mis à jour par le listener du tournoi
+        } catch (error) {
+            console.error("Erreur lors de la suppression du collaborateur par UID:", error);
+            showToast("Erreur lors de la suppression du collaborateur.", "error");
+        }
+    }
+
+    /**
+     * Supprime un collaborateur d'un tournoi par son email (pour affichage/gestion).
+     * @param {string} tournamentId L'ID du tournoi.
+     * @param {string} collaboratorEmail L'email du collaborateur à supprimer.
+     */
+    async function removeCollaboratorByEmailForDisplay(tournamentId, collaboratorEmail) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour gérer les collaborateurs.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible de supprimer le collaborateur, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas supprimer de collaborateurs.", "error");
+                return;
+            }
+            if (data.ownerId === window.userId && window.auth.currentUser.email === collaboratorEmail.trim()) {
+                 showToast("Vous êtes le propriétaire, vous ne pouvez pas vous retirer de la liste des collaborateurs.", "error");
+                 return;
+            }
+
+            let currentCollaboratorEmails = data.collaboratorEmails || [];
+            const updatedCollaboratorEmails = currentCollaboratorEmails.filter(email => email !== collaboratorEmail.trim());
+
+            if (updatedCollaboratorEmails.length === currentCollaboratorEmails.length) {
+                showToast("Cette adresse e-mail n'est pas dans la liste des collaborateurs.", "info");
+                return;
+            }
+
+            await window.updateDoc(tournamentRef, {
+                collaboratorEmails: updatedCollaboratorEmails
+            });
+            showToast(`Adresse e-mail "${escapeHtml(collaboratorEmail)}" supprimée de la liste.`, "success");
+            // Le rendu sera mis à jour par le listener du tournoi
+        } catch (error) {
+            console.error("Erreur lors de la suppression du collaborateur par email:", error);
+            showToast("Erreur lors de la suppression du collaborateur.", "error");
+        }
+    }
+
+    /**
+     * Met à jour l'affichage du nom du tournoi actif dans la barre de navigation.
+     */
+    function updateTournamentDisplay() {
+        if (currentTournamentData && currentTournamentId) {
+            currentTournamentNameSpan.textContent = `Tournoi: ${escapeHtml(currentTournamentData.name)}`;
+            currentTournamentNameSpan.classList.remove('hidden');
+        } else {
+            currentTournamentNameSpan.textContent = 'Aucun tournoi sélectionné';
+            currentTournamentNameSpan.classList.add('italic');
+        }
+    }
+
+    /**
+     * Met à jour la visibilité des liens de navigation en fonction de l'état d'authentification
+     * et de la sélection d'un tournoi.
+     */
+    function updateNavLinksVisibility() {
+        const isLoggedIn = !!window.userId;
+        const tournamentSelected = !!currentTournamentId;
+
+        authInfoDiv.classList.toggle('hidden', !isLoggedIn);
+        userEmailSpan.textContent = window.auth.currentUser ? window.auth.currentUser.email : '';
+
+        // Afficher/masquer les liens de navigation principaux
+        navLinks.equipes.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.brassages.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.eliminatoires.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.classements.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.collaborators.classList.toggle('hidden', !(isLoggedIn && tournamentSelected && currentTournamentData?.ownerId === window.userId)); // Collaborateurs visible seulement pour le propriétaire
+    }
+
+    /**
+     * Reconstruit la map `matchOccurrenceMap` à partir de `allBrassagePhases`.
+     * Ceci est nécessaire après le chargement des données depuis Firestore.
+     */
+    function rebuildMatchOccurrenceMap() {
+        matchOccurrenceMap.clear(); // Vider la map existante
+        // Seules les phases de brassage (initiales et secondaires) sont pertinentes pour les occurrences de matchs
+        allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE).forEach(phase => {
+            if (phase.generated && phase.pools) {
                 phase.pools.forEach(pool => {
                     pool.matches.forEach(match => {
-                        // Ensure both team IDs are valid before creating the key
-                        if (match.team1Id && match.team2Id) {
-                            // Create a canonical key by sorting IDs so order doesn't matter
+                        if (match.team1Id && match.team2Id) { // S'assurer que les équipes sont définies
                             const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
                             if (!matchOccurrenceMap.has(matchKey)) {
-                                matchOccurrenceMap.set(matchKey, new Set()); // Use a Set to avoid duplicate phase IDs
+                                matchOccurrenceMap.set(matchKey, new Set());
                             }
                             matchOccurrenceMap.get(matchKey).add(phase.id);
                         }
@@ -261,19 +827,19 @@
                 });
             }
         });
-        console.log("DEBUG: Match Occurrence Map rebuilt:", matchOccurrenceMap);
+        console.log("Map des occurrences de matchs reconstruite.");
     }
 
     /**
-     * Calculates and displays the count of repeated matches.
+     * Calcule et affiche le nombre de matchs répétés.
      */
     function updateRepeatedMatchesCountDisplay() {
         const countElement = document.getElementById('repeatedMatchesCount');
         if (countElement) {
             let repeatedCount = 0;
-            // Iterate over the map to count unique repeated encounters
+            // Itérer sur la map pour compter les rencontres répétées uniques
             for (const [matchKey, phaseIdsSet] of matchOccurrenceMap.entries()) {
-                if (phaseIdsSet.size > 1) { // A match is repeated if it occurred in more than one phase
+                if (phaseIdsSet.size > 1) { // Un match est répété s'il a eu lieu dans plus d'une phase
                     repeatedCount++;
                 }
             }
@@ -288,12 +854,12 @@
     }
 
     /**
-     * Checks if a given match has already occurred in another phase.
-     * @param {string} team1Id ID of the first team.
-     * @param {string} team2Id ID of the second team.
-     * @param {string} currentPhaseId ID of the current phase to exclude from the check.
-     * @param {Map} evaluationMatchMap The match occurrence map to use for this check (can be temporary).
-     * @returns {boolean} True if the match is a repeat, false otherwise.
+     * Vérifie si un match donné s'est déjà produit dans une autre phase.
+     * @param {string} team1Id ID de la première équipe.
+     * @param {string} team2Id ID de la deuxième équipe.
+     * @param {string} currentPhaseId ID de la phase actuelle à exclure de la vérification.
+     * @param {Map} evaluationMatchMap La map d'occurrences de matchs à utiliser pour cette vérification (peut être temporaire).
+     * @returns {boolean} Vrai si le match est une répétition, faux sinon.
      */
     function isMatchRepeated(team1Id, team2Id, currentPhaseId, evaluationMatchMap = matchOccurrenceMap) {
         if (!team1Id || !team2Id) return false;
@@ -301,17 +867,17 @@
         const occurrences = evaluationMatchMap.get(matchKey);
         if (!occurrences) return false;
 
-        // Check if this team pair has played in at least one *other* phase (not including currentPhaseId if it's the phase being evaluated).
+        // Vérifier si cette paire d'équipes a joué dans au moins une *autre* phase (sans inclure currentPhaseId si c'est la phase évaluée).
         return Array.from(occurrences).some(phaseId => phaseId !== currentPhaseId);
     }
 
     /**
-     * Displays a modal with details about a repeated match.
-     * @param {string} team1Name Name of the first team.
-     * @param {string} team2Name Name of the second team.
-     * @param {string} team1Id ID of the first team.
-     * @param {string} team2Id ID of the second team.
-     * @param {string} currentPhaseId ID of the current phase (to exclude from the list).
+     * Affiche une modale avec les détails d'un match répété.
+     * @param {string} team1Name Nom de la première équipe.
+     * @param {string} team2Name Nom de la deuxième équipe.
+     * @param {string} team1Id ID de la première équipe.
+     * @param {string} team2Id ID de la deuxième équipe.
+     * @param {string} currentPhaseId ID de la phase actuelle (à exclure de la liste).
      */
     function showRepeatedMatchDetailsModal(team1Name, team2Name, team1Id, team2Id, currentPhaseId) {
         const matchKey = JSON.stringify([team1Id, team2Id].sort());
@@ -325,7 +891,7 @@
         const previousPhases = Array.from(occurrences)
             .filter(phaseId => phaseId !== currentPhaseId) // Exclure la phase actuelle
             .map(phaseId => allBrassagePhases.find(p => p.id === phaseId))
-            .filter(phase => phase !== undefined); // Ensure the phase exists
+            .filter(phase => phase !== undefined); // S'assurer que la phase existe
 
         const modalContent = document.createElement('div');
         modalContent.className = 'text-gray-700';
@@ -357,7 +923,1046 @@
         const lowerCaseNewTeamName = teamName.toLowerCase();
         return allTeams.some(team => team.name.toLowerCase() === lowerCaseNewTeamName);
     }
+    // --- Fonctions de Gestion des Équipes ---
 
+    /**
+     * Ajoute une nouvelle équipe.
+     * @param {string} name - Le nom de l'équipe.
+     * @param {number} level - Le niveau de l'équipe (1-10).
+     */
+    function addTeam(name, level) {
+        if (!name.trim()) {
+            showToast("Le nom de l'équipe ne peut pas être vide.", "error");
+            return;
+        }
+        if (teamExists(name)) { // Utilise la fonction teamExists
+            showToast(`L'équipe "${escapeHtml(name)}" existe déjà. Veuillez choisir un nom différent.`, "error");
+            return;
+        }
+        if (isNaN(level) || level < 1 || level > 10) {
+            showToast("Le niveau doit être un nombre entre 1 et 10.", "error");
+            return;
+        }
+
+        const newTeam = {
+            id: 'team_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+            name: name.trim(),
+            level: level
+        };
+        allTeams.push(newTeam);
+        saveAllData();
+        // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+        showToast(`Équipe "${escapeHtml(name)}" ajoutée avec succès !`, "success");
+    }
+
+    /**
+     * Met à jour le nom et le niveau d'une équipe.
+     * @param {string} id - L'ID de l'équipe à mettre à jour.
+     * @param {string} newName - Le nouveau nom de l'équipe.
+     * @param {number} newLevel - Le nouveau niveau de l'équipe.
+     */
+    function updateTeam(id, newName, newLevel) {
+        if (!newName.trim()) {
+            showToast("Le nom de l'équipe ne peut pas être vide.", "error");
+            return;
+        }
+        if (teamExists(newName) && allTeams.find(t => t.id === id)?.name.toLowerCase() !== newName.toLowerCase()) {
+            showToast(`Une équipe nommée "${escapeHtml(newName)}" existe déjà.`, "error");
+            return;
+        }
+        if (isNaN(newLevel) || newLevel < 1 || newLevel > 10) {
+            showToast("Le niveau doit être un nombre entre 1 et 10.", "error");
+            return;
+        }
+
+        const teamToUpdate = allTeams.find(team => team.id === id);
+        if (teamToUpdate) {
+            teamToUpdate.name = newName.trim();
+            teamToUpdate.level = newLevel;
+            saveAllData();
+            // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+            showToast(`Équipe "${escapeHtml(newName)}" mise à jour.`, "success");
+        } else {
+            showToast("Équipe non trouvée.", "error");
+        }
+    }
+
+    /**
+     * Supprime une équipe.
+     * @param {string} id - L'ID de l'équipe à supprimer.
+     */
+    function deleteTeam(id) {
+        // Vérifier si l'équipe est impliquée dans une phase de brassage ou d'élimination
+        const isTeamInBrassage = allBrassagePhases.some(phase =>
+            phase.pools && phase.pools.some(pool =>
+                pool.teams.some(team => team.id === id) || pool.matches.some(match => match.team1Id === id || match.team2Id === id)
+            )
+        );
+
+        const isTeamInElimination = Object.values(eliminationPhases).some(bracket =>
+            bracket.bracket && bracket.bracket.some(round =>
+                round.matches.some(match => (match.team1 && match.team1.id === id) || (match.team2 && match.team2.id === id))
+            )
+        );
+
+        if (isTeamInBrassage || isTeamInElimination) {
+            const messageContent = document.createElement('p');
+            messageContent.innerHTML = `L'équipe est impliquée dans des phases de tournoi existantes (brassage ou élimination). Vous ne pouvez pas la supprimer.<br><br>Veuillez supprimer les phases concernées d'abord.`;
+            messageContent.className = 'text-gray-700';
+            showModal("Impossible de supprimer l'équipe", messageContent, () => hideModal());
+            return;
+        }
+
+        const teamToDelete = allTeams.find(team => team.id === id);
+        if (!teamToDelete) {
+            showToast("Équipe non trouvée.", "error");
+            return;
+        }
+
+        const messageContent = document.createElement('p');
+        messageContent.textContent = `Êtes-vous sûr de vouloir supprimer l'équipe "${escapeHtml(teamToDelete.name)}" ? Cette action est irréversible.`;
+        messageContent.className = 'text-gray-700';
+
+        showModal('Confirmer la suppression', messageContent, () => {
+            allTeams = allTeams.filter(team => team.id !== id);
+            eliminatedTeams.delete(id); // S'assurer qu'elle est retirée des équipes éliminées si elle y était
+            saveAllData();
+            // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+            showToast(`Équipe "${escapeHtml(teamToDelete.name)}" supprimée.`, "success");
+        }, true);
+    }
+
+    // --- Fonctions de Gestion des Phases de Brassage ---
+
+    /**
+     * Vérifie si une phase de brassage donnée est complète (tous les matchs ont des scores et un vainqueur).
+     * @param {Object} phase The phase object to check.
+     * @returns {boolean} True if the phase is complete, false otherwise.
+     */
+    function isBrassagePhaseComplete(phase) {
+        if (!phase || !phase.generated || !phase.pools) return false;
+        for (const pool of phase.pools) {
+            if (!pool.matches) return false;
+            for (const match of pool.matches) {
+                // Check if score1 and score2 are valid numbers and winnerId is set
+                if (match.score1 === null || match.score2 === null || isNaN(match.score1) || isNaN(match.score2) || match.winnerId === null) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Helper function to generate a single set of pools and evaluate its repetitions.
+     * @param {string} phaseType The type of phase (initial_brassage or secondary_brassage).
+     * @param {Array<Object>} teamsToUse The teams to use for generation.
+     * @param {number} requestedTeamsPerPool The number of teams desired per pool.
+     * @param {HTMLElement} msgElement Element to display messages (for internal generation failures).
+     * @param {string|null} currentPhaseIdToExclude The ID of the phase currently being generated (to exclude from repetition check).
+     * @returns {{pools: Array<Object>|null, repetitions: number, remainingTeamsCount: number}} Object with generated pools, repetition count, and remaining teams.
+     */
+    function generateAndEvaluatePools(phaseType, teamsToUse, requestedTeamsPerPool, msgElement, currentPhaseIdToExclude = null) {
+        let generationResult = null;
+        if (phaseType === PHASE_TYPE_INITIAL) {
+            generationResult = _generatePoolsLogicInitialLevels(teamsToUse, requestedTeamsPerPool, msgElement);
+        } else if (phaseType === PHASE_TYPE_SECONDARY_BRASSAGE) {
+            generationResult = _generatePoolsLogicRankingBased(teamsToUse, requestedTeamsPerPool, msgElement);
+        }
+
+        if (!generationResult || !generationResult.pools) {
+            return { pools: null, repetitions: Infinity, remainingTeamsCount: Infinity };
+        }
+
+        const generatedPools = generationResult.pools;
+
+        // Create a temporary, combined list of phases for evaluation, including the new generated one
+        const phasesForEvaluation = [...allBrassagePhases.filter(p => p.id !== currentPhaseIdToExclude)];
+        
+        // Create a temporary phase representation for the newly generated pools
+        const tempPhaseForEvaluation = {
+            id: currentPhaseIdToExclude || 'temp_phase_for_eval_' + Date.now(),
+            type: phaseType,
+            name: 'Temp Phase for Evaluation',
+            pools: generatedPools,
+            generated: true,
+            timestamp: Date.now() // Use a unique timestamp for uniqueness in the map
+        };
+        phasesForEvaluation.push(tempPhaseForEvaluation);
+
+
+        // Rebuild a temporary match occurrence map including the new pools
+        const tempMatchOccurrenceMap = new Map();
+        phasesForEvaluation.forEach(p => {
+            if (p.generated && p.pools) {
+                p.pools.forEach(pool => {
+                    pool.matches.forEach(match => {
+                        if (match.team1Id && match.team2Id) {
+                            const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
+                            if (!tempMatchOccurrenceMap.has(matchKey)) {
+                                tempMatchOccurrenceMap.set(matchKey, new Set());
+                            }
+                            tempMatchOccurrenceMap.get(matchKey).add(p.id);
+                        }
+                    });
+                });
+            }
+        });
+
+        let currentRepetitions = 0;
+        // Count repetitions specifically within the newly generated pools against ALL OTHER phases
+        tempPhaseForEvaluation.pools.forEach(pool => {
+            pool.matches.forEach(match => {
+                if (match.team1Id && match.team2Id) {
+                    const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
+                    const occurrences = tempMatchOccurrenceMap.get(matchKey);
+                    // A match is a repetition if it occurs in tempPhaseForEvaluation AND in at least one OTHER phase
+                    if (occurrences && occurrences.has(tempPhaseForEvaluation.id) && Array.from(occurrences).some(id => id !== tempPhaseForEvaluation.id)) {
+                         currentRepetitions++;
+                    }
+                }
+            });
+        });
+        
+        return { pools: generatedPools, repetitions: currentRepetitions, remainingTeamsCount: generationResult.remainingTeamsCount };
+    }
+
+
+    /**
+     * Unified function to generate pools for any brassage phase.
+     * @param {string} phaseIdToUpdate ID of the phase whose pools are to be generated.
+     */
+    function generatePoolsForPhase(phaseIdToUpdate) {
+        console.log("--- DEBUG: Entering generatePoolsForPhase ---");
+        console.log(`DEBUG: Requested Phase ID to Update: ${phaseIdToUpdate}`);
+
+        if (allTeams.length === 0) {
+            showToast("Aucune équipe n'a été ajoutée. Veuillez gérer les équipes d'abord.", "error");
+            console.log("DEBUG: No teams available, exiting.");
+            return;
+        }
+
+        const numPoolsInput = document.getElementById('teamsPerPool'); // Get the input element
+        const requestedTeamsPerPool = parseInt(numPoolsInput.value);
+
+        if (isNaN(requestedTeamsPerPool) || requestedTeamsPerPool < 1) {
+            showToast("Veuillez entrer un nombre valide d'équipes par poule (au moins 1).", "error");
+            console.log("DEBUG: Invalid teams per pool (less than 1), exiting.");
+            return;
+        }
+
+        if (requestedTeamsPerPool > 10) {
+            showToast("Le nombre d'équipes par poule ne peut pas dépasser 10 (le niveau maximum des équipes).", "error");
+            console.log("DEBUG: Teams per pool exceeds max level (10), exiting.");
+            return;
+        }
+
+        const phaseToGenerate = allBrassagePhases.find(p => p.id === phaseIdToUpdate);
+        if (!phaseToGenerate) {
+            showToast("Erreur: Phase à générer introuvable.", "error");
+            console.log(`DEBUG: Phase with ID ${phaseIdToUpdate} not found, exiting.`);
+            return;
+        }
+        console.log(`DEBUG: Phase to generate found: ${phaseToGenerate.name} (Type: ${phaseToGenerate.type})`);
+
+        // Get sorted list of actual brassage phases (initial and secondary)
+        const sortedActualBrassagePhases = allBrassagePhases
+            .filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE)
+            .sort((a, b) => a.timestamp - b.timestamp);
+        
+        const currentPhaseIndexInSorted = sortedActualBrassagePhases.findIndex(p => p.id === phaseIdToUpdate);
+        // Check if this is the absolute first brassage phase created by chronological order
+        const isFirstActualBrassagePhaseOverall = currentPhaseIndexInSorted === 0;
+        console.log(`DEBUG: Is this the first *overall* brassage phase? ${isFirstActualBrassagePhaseOverall}`);
+
+        // Get the user's selected pool generation basis directly from radio buttons
+        const basisInitialLevelsRadio = document.getElementById('basisInitialLevels');
+        const basisPreviousResultsRadio = document.getElementById('basisPreviousResults');
+        const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
+        console.log(`DEBUG: User's selected basis from radio buttons: "${selectedBasis}"`);
+
+        let effectiveUseInitialLevels;
+
+        if (isFirstActualBrassagePhaseOverall) {
+            // The very first brassage phase (initial or secondary, though usually initial) MUST use initial levels.
+            effectiveUseInitialLevels = true;
+            showToast("La toute première phase de brassage utilise toujours les niveaux initiaux des équipes.", "info");
+            console.log("DEBUG: This is the first *overall* brassage phase. Forcing effectiveUseInitialLevels = true.");
+        } else if (phaseToGenerate.type === PHASE_TYPE_SECONDARY_BRASSAGE) {
+            // Secondary brassage phases always derive from previous results.
+            effectiveUseInitialLevels = false;
+            console.log("DEBUG: Phase type is SECONDARY_BRASSAGE. Forcing effectiveUseInitialLevels = false.");
+        } else if (phaseToGenerate.type === PHASE_TYPE_INITIAL) {
+            // For subsequent initial brassage phases, respect the user's chosen basis.
+            effectiveUseInitialLevels = (selectedBasis === 'initialLevels');
+            console.log(`DEBUG: Phase type is INITIAL_BRASSAGE (not first overall). EffectiveUseInitialLevels based on selectedBasis: ${effectiveUseInitialLevels}.`);
+        } else {
+            // Fallback for any other unexpected phase type, default to initial levels or throw error
+            effectiveUseInitialLevels = true; // Safe default
+            console.warn(`DEBUG: Unknown phase type encountered (${phaseToGenerate.type}). Defaulting to initial levels.`);
+        }
+
+        console.log(`DEBUG: Final effectiveUseInitialLevels for this generation attempt: ${effectiveUseInitialLevels}`);
+
+        // Now, apply the check for previous results only if the effective method for THIS phase is 'previousResults'
+        if (!effectiveUseInitialLevels) { // This means the effective method for this generation is 'previousResults'
+            const previousBrassagePhase = sortedActualBrassagePhases[currentPhaseIndexInSorted - 1];
+            console.log(`DEBUG: Effective method is 'previousResults'. Checking previous phase completion.`);
+            if (!previousBrassagePhase) {
+                showToast("Erreur logique: La phase précédente est introuvable pour une génération basée sur les résultats.", "error");
+                console.log("DEBUG: Previous phase not found for results-based generation, exiting.");
+                return;
+            }
+            console.log(`DEBUG: Previous phase to check: ${previousBrassagePhase.name} (ID: ${previousBrassagePhase.id})`);
+            if (!isBrassagePhaseComplete(previousBrassagePhase)) {
+                showToast(`Veuillez compléter tous les scores de la phase précédente ("${escapeHtml(previousBrassagePhase.name)}") avant de générer les poules basées sur les résultats.`, "error");
+                console.log(`DEBUG: Previous phase (${previousBrassagePhase.name}) is NOT complete, exiting.`);
+                return;
+            }
+            console.log(`DEBUG: Previous phase (${previousBrassagePhase.name}) IS complete.`);
+        }
+        
+        // Determine the actual teams to use for generation
+        const teamsForGeneration = effectiveUseInitialLevels ? allTeams : (function() {
+            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+            const teamsWithScores = globalRankings.filter(r => r.totalPoints !== 0 || r.totalDiffScore !== 0).map(r => ({
+                id: r.teamObject.id,
+                name: r.teamObject.name,
+                level: r.teamObject.level,
+                totalPoints: r.totalPoints,
+                totalDiffScore: r.totalDiffScore
+            }));
+            // If there are no teams with scores, fall back to all teams but warn
+            if (teamsWithScores.length === 0 && !isFirstActualBrassagePhaseOverall) {
+                showToast("Aucune équipe avec des scores enregistrés pour générer des poules basées sur les résultats précédents. Les niveaux initiaux seront utilisés.", "error");
+                console.log("DEBUG: No teams with scores for results-based generation, falling back to all teams.");
+                return allTeams; // Fallback
+            }
+            console.log(`DEBUG: Teams for generation based on scores (${teamsWithScores.length} teams):`, teamsWithScores.map(t => `${t.name} (Pts: ${t.totalPoints}, Diff: ${t.totalDiffScore})`).join(', '));
+            return teamsWithScores.length > 0 ? teamsWithScores : allTeams; // Use teamsWithScores if available, else allTeams
+        })();
+
+        if (teamsForGeneration.length === 0) {
+             showToast("Aucune équipe disponible pour générer des poules.", "error");
+             console.log("DEBUG: No teams for generation, exiting.");
+             return;
+        }
+        if (teamsForGeneration.length < requestedTeamsPerPool) {
+            showToast(`Pas assez d'équipes (${teamsForGeneration.length}) pour former des poules de ${requestedTeamsPerPool} équipes. Réduisez le nombre d'équipes par poule ou ajoutez des équipes.` + (effectiveUseInitialLevels ? "" : " Assurez-vous d'avoir suffisamment d'équipes avec des scores valides."), "error");
+            console.log("DEBUG: Not enough teams for requested pools, exiting.");
+            return;
+        }
+
+
+        const MAX_ATTEMPTS = 20; // Number of times to try generating pools
+        let bestPools = null;
+        let minRepetitions = Infinity;
+        let bestRemainingTeamsCount = Infinity;
+        console.log(`DEBUG: Starting pool generation attempts (max ${MAX_ATTEMPTS})...`);
+
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+            // Generate and evaluate potential pools
+            const result = generateAndEvaluatePools(phaseToGenerate.type, teamsForGeneration, requestedTeamsPerPool, null, phaseIdToUpdate); // Pass null for msgElement to avoid duplicate toasts
+            
+            if (result.pools) {
+                // Prioritize fewer repetitions, then fewer remaining teams
+                if (result.repetitions < minRepetitions) {
+                    minRepetitions = result.repetitions;
+                    bestPools = result.pools;
+                    bestRemainingTeamsCount = result.remainingTeamsCount;
+                } else if (result.repetitions === minRepetitions && result.remainingTeamsCount < bestRemainingTeamsCount) {
+                    // If repetitions are the same, prefer fewer unassigned teams
+                    minRepetitions = result.repetitions; // Redundant but for clarity
+                    bestPools = result.pools;
+                    bestRemainingTeamsCount = result.remainingTeamsCount;
+                }
+                
+                // If we found a perfect solution (0 repetitions), no need to try further
+                if (minRepetitions === 0 && bestRemainingTeamsCount === 0) { // Also ensure all teams assigned
+                     console.log(`DEBUG: Optimal solution found in ${attempt + 1} attempts.`);
+                     break;
+                }
+            }
+        }
+
+        if (!bestPools) {
+            showToast("Impossible de générer des poules valides après plusieurs tentatives. Vérifiez le nombre d'équipes et les paramètres.", "error");
+            console.log("DEBUG: Failed to generate valid pools after all attempts, exiting.");
+            return;
+        }
+
+        const phaseIndex = allBrassagePhases.findIndex(p => p.id === phaseIdToUpdate);
+        if (phaseIndex > -1) {
+            allBrassagePhases[phaseIndex].pools = bestPools;
+            allBrassagePhases[phaseIndex].generated = true; 
+            saveAllData();
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData
+            // renderPhaseHistory();
+            // renderPoolsWithCurrentSettings(bestPools, allBrassagePhases[phaseIndex].name, phaseIdToUpdate);
+
+            let successMessage = bestPools.length + " poule(s) générée(s) avec succès pour cette phase ! ";
+            if (minRepetitions > 0) {
+                successMessage += `Ceci a entraîné ${minRepetitions} rencontre(s) répétée(s) (minimum trouvé après ${MAX_ATTEMPTS} tentatives).`;
+            } else {
+                successMessage += `Aucune rencontre répétée détectée dans cette phase.`;
+            }
+            if (bestRemainingTeamsCount > 0) {
+                successMessage += ` ${bestRemainingTeamsCount} équipe(s) n'ont pas pu être assignée(s) à une poule.`;
+            }
+            showToast(successMessage, "success");
+            console.log("DEBUG: Pool generation successful.");
+        } else {
+            showToast("Erreur: Phase à générer introuvable après les vérifications.", "error");
+            console.log("DEBUG: Phase not found after final checks, exiting.");
+        }
+        console.log("--- DEBUG: Exiting generatePoolsForPhase ---");
+    }
+
+    /**
+     * Logic to generate pools based on initial team levels.
+     * @param {Array<Object>} teamsToUse The teams to use for generation.
+     * @param {number} requestedTeamsPerPool The number of teams desired per pool.
+     * @param {HTMLElement} msgElement Element to display messages.
+     * @returns {Object|null} Object containing generated pools and remaining teams count, or null on failure.
+     */
+    function _generatePoolsLogicInitialLevels(teamsToUse, requestedTeamsPerPool, msgElement) {
+        const teamsByExactLevel = new Map();
+        for (let i = 1; i <= 10; i++) {
+            teamsByExactLevel.set(i, shuffleArray(teamsToUse.filter(team => team.level === i)));
+        }
+
+        let maxPoolsThatCanBeFormed = Infinity;
+        let requiredLevelsPresent = true;
+
+        for (let level = 1; level <= requestedTeamsPerPool; level++) {
+            const teamsAtLevel = teamsByExactLevel.get(level);
+            if (!teamsAtLevel || teamsAtLevel.length === 0) {
+                requiredLevelsPresent = false;
+                // showToast(`Impossible de former des poules de ${requestedTeamsPerPool} équipes: il manque des équipes de niveau ${level}.`, "error");
+                return null;
+            }
+            maxPoolsThatCanBeFormed = Math.min(maxPoolsThatCanBeFormed, teamsAtLevel.length);
+        }
+
+        if (!requiredLevelsPresent) return null;
+
+        const generatedPools = [];
+        for (let i = 0; i < maxPoolsThatCanBeFormed; i++) {
+            const poolName = String.fromCharCode(65 + i);
+            const pool = {
+                id: 'pool_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+                name: "Poule " + poolName,
+                teams: [],
+                matches: []
+            };
+
+            for (let level = 1; level <= requestedTeamsPerPool; level++) {
+                pool.teams.push(teamsByExactLevel.get(level).pop());
+            }
+
+            for (let t1_idx = 0; t1_idx < pool.teams.length; t1_idx++) {
+                for (let t2_idx = t1_idx + 1; t2_idx < pool.teams.length; t2_idx++) {
+                    pool.matches.push({
+                        team1Id: pool.teams[t1_idx].id,
+                        team1Name: pool.teams[t1_idx].name,
+                        team2Id: pool.teams[t2_idx].id,
+                        team2Name: pool.teams[t2_idx].name,
+                        score1: null,
+                        score2: null,
+                        winnerId: null
+                    });
+                }
+            }
+            generatedPools.push(pool);
+        }
+
+        let allRemainingTeams = [];
+        teamsByExactLevel.forEach(teamsAtLevel => {
+            allRemainingTeams.push(...teamsAtLevel);
+        });
+        allRemainingTeams = shuffleArray(allRemainingTeams);
+
+        let currentPoolIdxForRemaining = 0;
+        while (allRemainingTeams.length > 0 && generatedPools.length > 0) {
+            if (generatedPools.length === 0) break;
+
+            const pool = generatedPools[currentPoolIdxForRemaining];
+            const teamToAdd = allRemainingTeams.pop();
+
+            if (!pool.teams.some(t => t.id === teamToAdd.id)) { // Prevent adding same team multiple times
+                pool.teams.push(teamToAdd);
+                // Add new matches with the newly added team against existing teams in the pool
+                pool.teams.filter(t => t.id !== teamToAdd.id).forEach(existingTeam => {
+                    pool.matches.push({
+                        team1Id: teamToAdd.id,
+                        team1Name: teamToAdd.name,
+                        team2Id: existingTeam.id,
+                        team2Name: existingTeam.name,
+                        score1: null, score2: null, winnerId: null
+                    });
+                });
+            }
+            currentPoolIdxForRemaining = (currentPoolIdxForRemaining + 1) % generatedPools.length;
+        }
+        return { pools: generatedPools, remainingTeamsCount: allRemainingTeams.length };
+    }
+
+    /**
+     * Génère des poules basées sur le classement global, en essayant de minimiser les rencontres répétées.
+     * @param {Array<Object>} teamsForThisGroup Les équipes du groupe actuel, avec leurs totaux de points/diff.
+     * @param {number} requestedTeamsPerPool Le nombre d'équipes souhaité par poule.
+     * @param {HTMLElement} msgElement L'élément pour afficher les messages.
+     * @returns {Object|null} Les poules générées et le nombre d'équipes restantes, ou null en cas d'échec.
+     */
+    function _generatePoolsLogicRankingBased(teamsForThisGroup, requestedTeamsPerPool, msgElement) {
+        if (teamsForThisGroup.length === 0) {
+            // showToast("Aucune équipe disponible pour former les poules dans ce groupe.", "error");
+            return null;
+        }
+
+        const numInternalTiers = requestedTeamsPerPool; // Représente combien de niveaux nous divisons les équipes en
+        const totalTeamsInGroup = teamsForThisGroup.length;
+
+        if (numInternalTiers < 1) {
+            // showToast("Le nombre d'équipes par poule doit être au moins 1.", "error");
+            return null;
+        }
+
+        // Trier les équipes au sein du groupe par leur classement (points, puis différence de score)
+        const sortedTeamsWithinGroup = [...teamsForThisGroup].sort((a, b) => b.totalPoints - a.totalPoints || b.totalDiffScore - a.totalDiffScore);
+
+        const teamsGroupedByInternalTier = new Map();
+        for(let i = 0; i < numInternalTiers; i++) {
+            teamsGroupedByInternalTier.set(i, []);
+        }
+
+        // Distribuer les équipes de manière égale dans `numInternalTiers` en fonction de leur ordre trié
+        for (let i = 0; i < totalTeamsInGroup; i++) {
+            const tierIndex = i % numInternalTiers; // Distribution en serpentin dans les niveaux
+            teamsGroupedByInternalTier.get(tierIndex).push(sortedTeamsWithinGroup[i]);
+        }
+
+        // Déterminer le nombre de poules en fonction de la plus petite taille de niveau
+        let minTierSize = Infinity;
+        const tierKeys = Array.from(teamsGroupedByInternalTier.keys()).sort((a,b)=>a-b);
+
+        for (const tier of tierKeys) {
+            const teamsInThisTier = teamsGroupedByInternalTier.get(tier);
+            minTierSize = Math.min(minTierSize, teamsInThisTier.length);
+        }
+
+        if (minTierSize === 0 || minTierSize === Infinity || minTierSize < 1) {
+            // showToast(`Pas assez d'équipes pour former des poules équilibrées de ${requestedTeamsPerPool} équipes à partir de ce groupe. Réduisez le nombre d'équipes par poule ou ajoutez des équipes.`, "error");
+            return null;
+        }
+
+        const numberOfPools = minTierSize;
+        const generatedPools = [];
+
+        // Générer des décalages aléatoires pour chaque niveau afin de diversifier les compositions de poules
+        // C'est le changement principal pour minimiser les répétitions : chaque niveau commencera sa sélection d'équipe
+        // à partir d'un point différent, en tournant à travers ses membres pour chaque poule.
+        const tierOffsets = shuffleArray(Array.from({length: numInternalTiers}, (_, k) => k));
+
+        for (let i = 0; i < numberOfPools; i++) {
+            const poolName = String.fromCharCode(65 + i);
+            const pool = {
+                id: 'pool_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+                name: "Poule " + poolName,
+                teams: [],
+                matches: []
+            };
+
+            for (const tier of tierKeys) {
+                const teamsInThisTier = teamsGroupedByInternalTier.get(tier);
+                // Appliquer le décalage pour choisir l'équipe du niveau, en s'assurant de revenir au début si l'index dépasse la longueur
+                const actualIndex = (i + tierOffsets[tier]) % teamsInThisTier.length;
+                
+                if (teamsInThisTier && teamsInThisTier[actualIndex]) {
+                    // Nous devons passer l'objet équipe complet ici, pas seulement l'ID/le nom.
+                    // Les `teamsForThisGroup` contiennent déjà les objets équipe originaux et leurs scores calculés.
+                    const originalTeam = allTeams.find(t => t.id === teamsInThisTier[actualIndex].id);
+                    if (originalTeam) {
+                        pool.teams.push({
+                            ...originalTeam, // Propriétés de l'équipe originale (id, nom, niveau)
+                            totalPoints: teamsInThisTier[actualIndex].totalPoints, // Points calculés
+                            totalDiffScore: teamsInThisTier[actualIndex].totalDiffScore // Différence de score calculée
+                        });
+                    } else {
+                        console.warn(`Original team data not found for ID: ${teamsInThisTier[actualIndex].id}`);
+                        pool.teams.push(teamsInThisTier[actualIndex]); // Fallback vers les données partielles
+                    }
+                    
+                } else {
+                    console.warn(`ATTENTION: Tentative de prendre une équipe de tiers vide ou hors limite pour la poule ${pool.name}, tier ${tier}, index ${actualIndex}.`);
+                }
+            }
+
+            shuffleArray(pool.teams); // Mélanger les équipes dans la poule après la sélection
+
+            // Générer les matchs pour cette poule (tous contre tous)
+            for (let t1_idx = 0; t1_idx < pool.teams.length; t1_idx++) {
+                for (let t2_idx = t1_idx + 1; t2_idx < pool.teams.length; t2_idx++) {
+                    pool.matches.push({
+                        team1Id: pool.teams[t1_idx].id,
+                        team1Name: pool.teams[t1_idx].name,
+                        team2Id: pool.teams[t2_idx].id,
+                        team2Name: pool.teams[t2_idx].name,
+                        score1: null,
+                        score2: null,
+                        winnerId: null
+                    });
+                }
+            }
+            generatedPools.push(pool);
+        }
+
+        let remainingTeamsCount = 0;
+        // Calculer les équipes restantes (celles qui ne sont utilisées dans aucune poule)
+        teamsGroupedByInternalTier.forEach(group => {
+            remainingTeamsCount += (group.length - numberOfPools);
+        });
+
+        return { pools: generatedPools, remainingTeamsCount: remainingTeamsCount };
+    }
+
+    /**
+     * Renommage de la fonction `previewSecondaryGroups` en `_performSecondaryGroupsPreview`
+     * et ajout d'un wrapper `previewSecondaryGroups` pour la modale d'avertissement.
+     */
+    function _performSecondaryGroupsPreview() {
+        const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+        const secondaryGroupsPreviewDisplay = document.getElementById('secondaryGroupsPreviewDisplay');
+        const validateSecondaryGroupsBtn = document.getElementById('validateSecondaryGroupsBtn');
+        const generateSecondaryBrassagesBtn = document.getElementById('generateSecondaryBrassagesBtn');
+        const refreshSecondaryGroupScoresBtn = document.getElementById('refreshSecondaryGroupScoresBtn');
+
+        const numGroups = parseInt(numberOfSecondaryGroupsInput.value);
+        if (isNaN(numGroups) || (numGroups !== 2 && numGroups !== 3)) {
+            showToast("Veuillez choisir 2 ou 3 groupes de niveau pour la création.", "error");
+            secondaryGroupsPreviewDisplay.innerHTML = '';
+            validateSecondaryGroupsBtn.classList.add('hidden');
+            generateSecondaryBrassagesBtn.classList.add('hidden');
+            refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
+            currentSecondaryGroupsPreview = {}; // Clear preview if invalid selection
+            saveAllData();
+            return;
+        }
+
+        const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+        if (globalRankings.length === 0) {
+            showToast("Aucune équipe classée disponible pour créer les groupes. Générez et terminez des phases de brassage initiales d'abord.", "error");
+            secondaryGroupsPreviewDisplay.innerHTML = '';
+            validateSecondaryGroupsBtn.classList.add('hidden');
+            generateSecondaryBrassagesBtn.classList.add('hidden');
+            refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
+            currentSecondaryGroupsPreview = {}; // Clear preview if no rankings
+            saveAllData();
+            return;
+        }
+
+        currentSecondaryGroupsPreview = {}; // Reset for new preview
+        const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+        const selectedGroupNames = groupNamesMap[numGroups];
+
+        const teamsToDistribute = [...globalRankings];
+        const totalTeams = teamsToDistribute.length;
+        const baseGroupSize = Math.floor(totalTeams / numGroups);
+        let remainder = totalTeams % numGroups;
+        let currentTeamIndex = 0;
+
+        for (let i = 0; i < numGroups; i++) {
+            const groupName = selectedGroupNames[i];
+            currentSecondaryGroupsPreview[groupName] = [];
+            const currentSize = baseGroupSize + (remainder > 0 ? 1 : 0);
+            if (remainder > 0) remainder--;
+
+            for (let j = 0; j < currentSize; j++) {
+                if (teamsToDistribute[currentTeamIndex]) {
+                    const teamForPreview = {
+                        ...teamsToDistribute[currentTeamIndex].teamObject,
+                        totalPoints: teamsToDistribute[currentTeamIndex].totalPoints,
+                        totalDiffScore: teamsToDistribute[currentTeamIndex].totalDiffScore,
+                        previewGroup: groupName
+                    };
+                    currentSecondaryGroupsPreview[groupName].push(teamForPreview);
+                }
+                currentTeamIndex++;
+            }
+        }
+
+        renderSecondaryGroupsPreview(selectedGroupNames);
+        saveAllData(); // Save the newly generated preview
+        showToast(`Création des ${numGroups} groupes de niveau terminée. Ajustez si nécessaire.`, "success");
+    }
+
+    /**
+     * NOUVELLE FONCTION: Affiche une modale avec les options pour une équipe spécifique.
+     * Permet de déplacer l'équipe ou de changer son statut d'élimination.
+     * @param {string} teamId L'ID de l'équipe.
+     * @param {string} teamName Le nom de l'équipe.
+     * @param {number} totalPoints Les points totaux de l'équipe.
+     * @param {number} totalDiffScore La différence de score totale de l'équipe.
+     * @param {string} currentGroup Le groupe actuel de l'équipe.
+     * @param {Array<string>} allGroupNames Tous les noms de groupes possibles.
+     */
+    function showTeamOptionsModal(teamId, teamName, totalPoints, totalDiffScore, currentGroup, allGroupNames) {
+        const isCurrentlyEliminated = eliminatedTeams.has(teamId);
+        const teamStatusText = isCurrentlyEliminated ? 'Actuellement **Éliminée**' : 'Actuellement **En Jeu**';
+        const toggleEliminationAction = isCurrentlyEliminated ? 'Remettre en jeu' : 'Éliminer';
+        const toggleEliminationColor = isCurrentlyEliminated ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700';
+
+        const modalContentDiv = document.createElement('div');
+        modalContentDiv.className = 'space-y-4 text-gray-700';
+        modalContentDiv.innerHTML = `
+            <p class="text-md">Options pour <span class="font-bold">${escapeHtml(teamName)}</span> (Pts: ${totalPoints}, Diff: ${totalDiffScore})</p>
+            <p class="text-sm font-semibold">${teamStatusText}</p>
+            <div class="flex flex-col space-y-2 mt-4">
+                <button id="moveTeamOptionBtn" class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition ease-in-out duration-150">
+                    Déplacer l'équipe dans un autre groupe
+                </button>
+                <button id="toggleEliminationOptionBtn" class="${toggleEliminationColor} text-white py-2 px-4 rounded-md transition ease-in-out duration-150">
+                    ${toggleEliminationAction} cette équipe
+                </button>
+            </div>
+        `;
+
+        // On ne passe pas de confirmCallback directe à showModal ici,
+        // car les boutons de la modale interne auront leurs propres callbacks.
+        // On utilise une modale "neutre" pour le conteneur.
+        showModal(`Gérer l'équipe : ${escapeHtml(teamName)}`, modalContentDiv, () => { /* Aucune action par défaut */ });
+
+        document.getElementById('moveTeamOptionBtn').addEventListener('click', () => {
+            hideModal(); // Cacher la modale d'options
+            showMoveTeamModal(teamId, teamName, currentGroup, totalPoints, totalDiffScore, allGroupNames);
+        });
+
+        document.getElementById('toggleEliminationOptionBtn').addEventListener('click', () => {
+            if (eliminatedTeams.has(teamId)) {
+                eliminatedTeams.delete(teamId);
+                showToast(`${escapeHtml(teamName)} remise en jeu.`, "info");
+            } else {
+                eliminatedTeams.add(teamId);
+                showToast(`${escapeHtml(teamName)} éliminée.`, "info");
+            }
+            saveAllData();
+            // Re-render la prévisualisation des groupes secondaires pour que les changements soient visibles
+            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+            const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+            renderSecondaryGroupsPreview(groupNamesMap[parseInt(numberOfSecondaryGroupsInput.value)]);
+            hideModal(); // Cacher la modale après l'action
+        });
+
+        // Ajuster les boutons de la modale principale pour qu'ils ne fassent rien
+        // lorsque cette modale d'options est ouverte.
+        // La "confirmCallback" passée à showModal était déjà vide, donc pas de conflit ici.
+        // Le bouton de confirmation de showModal restera visible mais inactif si aucune action n'y est assignée.
+        // On s'assure qu'il n'exécute rien de la modale parente.
+        modalConfirmBtn.onclick = () => hideModal(); // Just hide the modal if the main confirm is clicked
+        modalCancelBtn.onclick = () => hideModal(); // Just hide the modal if the main cancel is clicked
+    }
+
+    /**
+     * Affiche une modale pour déplacer une équipe entre les groupes secondaires.
+     * @param {string} teamId L'ID de l'équipe à déplacer.
+     * @param {string} teamName Le nom de l'équipe.
+     * @param {string} currentGroup Le groupe actuel de l'équipe.
+     * @param {number} totalPoints Les points totaux de l'équipe.
+     * @param {number} totalDiffScore La différence de score totale de l'équipe.
+     * @param {Array<string>} allGroupNames Tous les noms de groupes possibles.
+     */
+    function showMoveTeamModal(teamId, teamName, currentGroup, totalPoints, totalDiffScore, allGroupNames) {
+        const formDiv = document.createElement('div');
+        formDiv.className = 'space-y-4';
+        formDiv.innerHTML = `
+            <p class="text-gray-700">Déplacer l'équipe <span class="font-bold">${escapeHtml(teamName)}</span> (Pts: ${totalPoints}, Diff: ${totalDiffScore}) :</p>
+            <div>
+                <label for="moveTeamGroupSelect" class="block text-sm font-medium text-gray-700 mb-1">Nouveau groupe :</label>
+                <select id="moveTeamGroupSelect"
+                        class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                </select>
+            </div>
+            <p id="moveModalMessage" class="text-sm text-center"></p>
+        `;
+        const groupSelect = formDiv.querySelector('#moveTeamGroupSelect');
+
+        allGroupNames.forEach(groupName => {
+            const option = document.createElement('option');
+            option.value = groupName;
+            option.textContent = groupName;
+            if (groupName === currentGroup) {
+                option.selected = true;
+            }
+            groupSelect.appendChild(option);
+        });
+
+        showModal('Déplacer l\'équipe', formDiv, async () => {
+            const newGroup = groupSelect.value;
+            const moveModalMessage = document.getElementById('moveModalMessage');
+
+            if (newGroup === currentGroup) {
+                return; // hideModal is handled by showModal's callback
+            }
+
+            moveTeamBetweenSecondaryGroups(teamId, currentGroup, newGroup);
+        });
+    }
+
+    /**
+     * Déplace une équipe entre deux groupes secondaires.
+     * @param {string} teamId L'ID de l'équipe à déplacer.
+     * @param {string} fromGroup Le nom du groupe d'origine.
+     * @param {string} toGroup Le nom du groupe de destination.
+     */
+    function moveTeamBetweenSecondaryGroups(teamId, fromGroup, toGroup) {
+        if (fromGroup === toGroup) return;
+
+        let teamToMove = null;
+        currentSecondaryGroupsPreview[fromGroup] = currentSecondaryGroupsPreview[fromGroup].filter(team => {
+            if (team.id === teamId) {
+                teamToMove = team;
+                return false;
+            }
+            return true;
+        });
+
+        if (teamToMove) {
+            teamToMove.previewGroup = toGroup;
+            if (!currentSecondaryGroupsPreview[toGroup]) {
+                currentSecondaryGroupsPreview[toGroup] = [];
+            }
+            currentSecondaryGroupsPreview[toGroup].push(teamToMove);
+
+            // Re-sort the destination group to maintain rank order for display/future logic
+            currentSecondaryGroupsPreview[toGroup].sort((a, b) => b.totalPoints - a.totalPoints || b.totalDiffScore - a.totalDiffScore);
+
+            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+            const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+            renderSecondaryGroupsPreview(groupNamesMap[parseInt(numberOfSecondaryGroupsInput.value)]);
+            saveAllData(); // Save the state after manual move
+            showToast(`Équipe ${escapeHtml(teamToMove.name)} déplacée vers ${escapeHtml(toGroup)}.`, "success");
+
+        } else {
+            console.error("ERROR: Team not found for movement:", teamId);
+        }
+    }
+
+    /**
+     * Valide la composition actuelle des groupes secondaires pour les phases éliminatoires.
+     * Crée une phase spéciale de type `elimination_seeding`.
+     */
+    function validateSecondaryGroupsForElimination() {
+        const messageContent = document.createElement('p');
+        messageContent.textContent = "Confirmer la composition actuelle des groupes pour les phases éliminatoires ? Cette action enregistre ce regroupement.";
+        messageContent.className = 'text-gray-700';
+
+        showModal('Valider les Groupes', messageContent, () => {
+            if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
+                showToast("Aucun groupe à valider. Créez les groupes d'abord.", "error");
+                return; // hideModal is handled by showModal's callback
+            }
+
+            // Remove only existing elimination seeding phases to avoid duplicates if re-validating
+            allBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING);
+
+            const eliminationSeedingPhase = {
+                id: `${PHASE_TYPE_ELIMINATION_SEEDING}_${Date.now()}`,
+                type: PHASE_TYPE_ELIMINATION_SEEDING, // Ensure type is correct
+                name: `Répartition Éliminatoire Validée (${new Date().toLocaleDateString('fr-FR')})`,
+                timestamp: Date.now(),
+                groupedTeams: JSON.parse(JSON.stringify(currentSecondaryGroupsPreview)), // Deep copy
+                generated: true // Mark as generated/validated
+            };
+            allBrassagePhases.push(eliminationSeedingPhase);
+            saveAllData();
+            showToast("Répartition des groupes validée et enregistrée pour les éliminatoires !", "success");
+        });
+    }
+
+    /**
+     * NOUVELLE FONCTION : Validation directe pour l'élimination.
+     * Crée une phase de type `elimination_seeding` avec toutes les équipes éligibles dans un seul groupe.
+     */
+    async function validateForDirectElimination() {
+        const messageContent = document.createElement('p');
+        messageContent.innerHTML = `
+            Êtes-vous sûr de vouloir valider toutes les équipes (non éliminées)
+            pour la phase éliminatoire en vous basant sur le classement général ?
+            <br>
+            **Attention :** Cette action écrasera toute configuration de groupes secondaires préalablement validée
+            et passera les équipes sélectionnées à l'étape éliminatoire principale.
+        `;
+        messageContent.className = 'text-gray-700';
+
+        showModal('Confirmer la validation directe pour l\'élimination', messageContent, async () => {
+            if (allTeams.length === 0) {
+                showToast("Aucune équipe enregistrée. Veuillez ajouter des équipes d'abord.", "error");
+                return;
+            }
+
+            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+            if (globalRankings.length === 0) {
+                showToast("Aucune équipe classée disponible. Veuillez générer et terminer des phases de brassage d'abord.", "error");
+                return;
+            }
+
+            // Filter out eliminated teams from the rankings
+            const eligibleTeams = globalRankings.filter(rankEntry => !eliminatedTeams.has(rankEntry.teamObject.id));
+
+            if (eligibleTeams.length === 0) {
+                showToast("Aucune équipe éligible (non éliminée) trouvée pour la phase éliminatoire.", "info");
+                return;
+            }
+
+            // Create a single group for all eligible teams
+            const directEliminationGroup = {
+                "Principale": eligibleTeams.map(r => ({
+                    ...r.teamObject, // Original team properties (id, nom, level)
+                    totalPoints: r.totalPoints, // Calculated points
+                    totalDiffScore: r.totalDiffScore, // Calculated diff score
+                    previewGroup: "Principale" // Indicate they belong to the main group
+                }))
+            };
+            
+            // Clear any existing secondary groups preview data
+            currentSecondaryGroupsPreview = {}; 
+            await saveAllData(); // Save cleared preview
+
+            // Remove only existing elimination seeding phases to avoid duplicates if re-validating
+            allBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING);
+
+            const eliminationSeedingPhase = {
+                id: `${PHASE_TYPE_ELIMINATION_SEEDING}_${Date.now()}_direct`,
+                type: PHASE_TYPE_ELIMINATION_SEEDING,
+                name: `Validation Élimination Directe (${new Date().toLocaleDateString('fr-FR')})`,
+                timestamp: Date.now(),
+                groupedTeams: directEliminationGroup, // Use the single main group
+                generated: true
+            };
+
+            allBrassagePhases.push(eliminationSeedingPhase);
+            await saveAllData();
+            showToast("Toutes les équipes éligibles validées pour l'élimination directe !", "success");
+            window.location.hash = '#eliminatoires'; // Redirect to elimination page
+        }, true); // Use red style for confirmation as it overwrites
+    }
+
+
+    /**
+     * Génère les phases de brassage secondaires basées sur les groupes prévisualisés.
+     */
+    async function generateSecondaryBrassagePhases() {
+        console.log("DEBUG: Lancement de generateSecondaryBrassagePhases...");
+
+        const numPoolsInput = document.getElementById('teamsPerPool');
+        const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+        const secondaryPreviewMessage = document.getElementById('secondaryPreviewMessage');
+
+        const teamsPerPoolForNewPhases = parseInt(numPoolsInput.value);
+
+        if (isNaN(teamsPerPoolForNewPhases) || teamsPerPoolForNewPhases < 1) {
+            showToast("Veuillez entrer un nombre valide d'équipes par poule (au moins 1) pour les phases secondaires.", "error");
+            return;
+        }
+
+        if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
+            showToast("Veuillez d'abord créer les groupes de brassage secondaires.", "error");
+            return;
+        }
+
+        const newPhases = [];
+        const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+        const numGroups = parseInt(numberOfSecondaryGroupsInput.value);
+        const selectedGroupNames = groupNamesMap[numGroups];
+
+        let generationFailed = false;
+
+        for (const groupName of selectedGroupNames) {
+            const teamsInThisGroup = currentSecondaryGroupsPreview[groupName];
+            console.log(`DEBUG: Traitement du groupe: ${groupName} avec ${teamsInThisGroup ? teamsInThisGroup.length : 0} équipes.`);
+
+            if (!teamsInThisGroup || teamsInThisGroup.length < teamsPerPoolForNewPhases) {
+                showToast(`Le groupe "${escapeHtml(groupName)}" n'a pas assez d'équipes pour former des poules de ${teamsPerPoolForNewPhases} équipes. (${teamsInGroup.length} équipes disponibles)`, "error");
+                generationFailed = true;
+                break;
+            }
+            // Use the retry logic for secondary brassage generation too
+            const MAX_ATTEMPTS = 20;
+            let bestResult = null;
+            let minReps = Infinity;
+            let bestRemCount = Infinity;
+
+            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+                const result = generateAndEvaluatePools(PHASE_TYPE_SECONDARY_BRASSAGE, teamsInThisGroup, teamsPerPoolForNewPhases, secondaryPreviewMessage);
+                if (result.pools) {
+                    if (result.repetitions < minReps) {
+                        minReps = result.repetitions;
+                        bestResult = result;
+                    } else if (result.repetitions === minReps && result.remainingTeamsCount < bestRemCount) {
+                        minReps = result.repetitions; // Redundant but for clarity
+                        bestResult = result;
+                    }
+                    if (minReps === 0 && bestRemCount === 0) break;
+                }
+            }
+
+            if (bestResult && bestResult.pools.length > 0) {
+                const newPhase = {
+                    id: `${PHASE_TYPE_SECONDARY_BRASSAGE}_${Date.now()}_${groupName.replace(/\s/g, '_')}`,
+                    type: PHASE_TYPE_SECONDARY_BRASSAGE,
+                    name: `Brassage ${groupName}`, // Nom sans la date
+                    pools: bestResult.pools,
+                    generated: true,
+                    timestamp: Date.now() + newPhases.length // Ensure unique timestamp for ordering
+                };
+                newPhases.push(newPhase);
+            } else {
+                showToast(`Impossible de générer des poules pour le groupe ${escapeHtml(groupName)}. Vérifiez si vous avez suffisamment d'équipes dans ce groupe pour les poules de ${teamsPerPoolForNewPhases} équipes.`, "error");
+                generationFailed = true;
+                break;
+            }
+        }
+
+        if (!generationFailed && newPhases.length > 0 && newPhases.length === numGroups) {
+            allBrassagePhases.push(...newPhases);
+            await saveAllData();
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData
+            // renderPhaseHistory();
+            // renderPoolsWithCurrentSettings(newPhases[0].pools, newPhases[0].name, newPhases[0].id);
+            showToast(`${newPhases.length} phases de brassage secondaires générées avec succès !`, "success");
+        } else if (generationFailed) {
+            console.error("ERREUR: La génération des phases supplémentaires a échoué pour au moins un groupe.");
+        } else {
+            showToast("Aucune phase de brassage secondaire n'a pu être générée. Vérifiez vos paramètres et le classement actuel.", "error");
+            console.error("ERREUR: Aucune phase secondaire n'a été générée malgré aucune erreur explicite.");
+        }
+    }
+
+    /**
+     * Supprime toutes les phases de brassage (initiales et secondaires).
+     */
+    async function clearAllPhases() {
+        const messageContent = document.createElement('p');
+        messageContent.textContent = "Êtes-vous sûr de vouloir supprimer TOUTES les phases de brassage (initiales et secondaires) ? Cette action est irréversible.";
+        messageContent.className = 'text-gray-700';
+
+        showModal('Confirmer la suppression de toutes les phases', messageContent, async () => {
+            allBrassagePhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING); // Keep only seeding phases
+            currentSecondaryGroupsPreview = {}; // Clear secondary groups preview
+            await saveAllData();
+
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData
+            // renderPhaseHistory();
+            // poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
+            // currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
+            // currentDisplayedPhaseId = null;
+            // secondaryGroupsPreviewDisplay.innerHTML = '<p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Créer les groupes".</p>';
+            // validateSecondaryGroupsBtn.classList.add('hidden');
+            // generateSecondaryBrassagesBtn.classList.add('hidden');
+            // refreshSecondaryGroupScoresBtn.classList.add('hidden');
+            showToast("Toutes les phases de brassage ont été supprimées.", "success");
+        }, true); // Use red style for confirmation button
+    }
     // --- Logique du Classement (partagée) ---
 
     /**
@@ -372,17 +1977,17 @@
                 teamObject: team,
                 totalPoints: 0,
                 totalDiffScore: 0,
-                detailsByPhase: {} // To store points/diff for each phase individually
+                detailsByPhase: {} // Pour stocker les points/diff pour chaque phase individuellement
             });
         });
 
         brassagePhases.forEach(phase => {
             // Seulement compter les scores des phases de brassage initiales et secondaires
             if ((phase.type === PHASE_TYPE_INITIAL || phase.type === PHASE_TYPE_SECONDARY_BRASSAGE) && phase.generated && phase.pools) {
-                // Initialize phase details for all teams for this phase
+                // Initialiser les détails de phase pour toutes les équipes pour cette phase
                 teams.forEach(team => {
                     const teamStats = rankings.get(team.id);
-                    if (teamStats) { // Ensure teamStats exists
+                    if (teamStats) { // S'assurer que teamStats existe
                         if (!teamStats.detailsByPhase[phase.id]) {
                             teamStats.detailsByPhase[phase.id] = { points: 0, diffScore: 0 };
                         }
@@ -400,7 +2005,7 @@
                                 const team1Stats = rankings.get(match.team1Id);
                                 const team2Stats = rankings.get(match.team2Id);
 
-                                // Update global totals
+                                // Mettre à jour les totaux globaux
                                 if (team1Stats) {
                                     team1Stats.totalDiffScore += (score1 - score2);
                                     if (score1 > score2) team1Stats.totalPoints += 8;
@@ -422,7 +2027,7 @@
                                     }
                                 }
 
-                                // Update per-phase totals
+                                // Mettre à jour les totaux par phase
                                 if (team1Stats && team1Stats.detailsByPhase[phase.id]) {
                                     team1Stats.detailsByPhase[phase.id].diffScore += (score1 - score2);
                                     if (score1 > score2) team1Stats.detailsByPhase[phase.id].points += 8;
@@ -466,6 +2071,95 @@
 
     // --- Fonctions de Rendu des Pages (Vues) ---
 
+    /**
+     * Affiche la page d'authentification (connexion/inscription).
+     */
+    function renderAuthPage() {
+        APP_CONTAINER.innerHTML = `
+            <div class="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
+                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Connexion / Inscription</h1>
+                <div class="mb-4">
+                    <label for="authEmail" class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input type="email" id="authEmail" placeholder="votre.email@example.com"
+                           class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                </div>
+                <div class="mb-6">
+                    <label for="authPassword" class="block text-sm font-medium text-gray-700 mb-1">Mot de passe</label>
+                    <input type="password" id="authPassword" placeholder="********"
+                           class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                </div>
+                <div class="flex flex-col space-y-3">
+                    <button id="loginBtn"
+                            class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Se connecter
+                    </button>
+                    <button id="registerBtn"
+                            class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        S'inscrire
+                    </button>
+                </div>
+                <p id="authMessage" class="mt-4 text-sm text-center text-red-500"></p>
+            </div>
+        `;
+        setupAuthPageLogic();
+    }
+
+    /**
+     * Logique de la page d'authentification.
+     */
+    function setupAuthPageLogic() {
+        const authEmailInput = document.getElementById('authEmail');
+        const authPasswordInput = document.getElementById('authPassword');
+        const loginBtn = document.getElementById('loginBtn');
+        const registerBtn = document.getElementById('registerBtn');
+        const authMessage = document.getElementById('authMessage');
+
+        loginBtn.addEventListener('click', async () => {
+            const email = authEmailInput.value.trim();
+            const password = authPasswordInput.value.trim();
+            if (!email || !password) {
+                authMessage.textContent = "Veuillez entrer un email et un mot de passe.";
+                return;
+            }
+            try {
+                await window.signInWithEmailAndPassword(window.auth, email, password);
+                showToast("Connexion réussie !", "success");
+                authMessage.textContent = "";
+                // Redirection gérée par onAuthStateChanged -> loadAllData -> handleLocationHash
+            } catch (error) {
+                console.error("Erreur de connexion:", error);
+                authMessage.textContent = "Erreur de connexion: " + error.message;
+                showToast("Erreur de connexion: " + error.message, "error");
+            }
+        });
+
+        registerBtn.addEventListener('click', async () => {
+            const email = authEmailInput.value.trim();
+            const password = authPasswordInput.value.trim();
+            if (!email || !password) {
+                authMessage.textContent = "Veuillez entrer un email et un mot de passe.";
+                return;
+            }
+            if (password.length < 6) {
+                authMessage.textContent = "Le mot de passe doit contenir au moins 6 caractères.";
+                return;
+            }
+            try {
+                await window.createUserWithEmailAndPassword(window.auth, email, password);
+                showToast("Inscription réussie ! Vous êtes maintenant connecté.", "success");
+                authMessage.textContent = "";
+                // Redirection gérée par onAuthStateChanged -> loadAllData -> handleLocationHash
+            } catch (error) {
+                console.error("Erreur d'inscription:", error);
+                authMessage.textContent = "Erreur d'inscription: " + error.message;
+                showToast("Erreur d'inscription: " + error.message, "error");
+            }
+        });
+    }
+
+    /**
+     * Affiche la page d'accueil du tournoi.
+     */
     function renderHomePage() {
         APP_CONTAINER.innerHTML = `
             <div class="max-w-5xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
@@ -725,24 +2419,25 @@
                             const newLevel = parseInt(document.getElementById('editTeamLevel').value);
 
                             if (!newName) {
-                                showMessage(messageElement, "Le nom de l'équipe ne peut pas être vide.", true);
+                                showToast("Le nom de l'équipe ne peut pas être vide.", "error");
                                 return;
                             }
                             // Check for duplicate name during edit, excluding the current team being edited
                             if (teamExists(newName) && newName.toLowerCase() !== teamToEdit.name.toLowerCase()) {
-                                showMessage(messageElement, `Une équipe nommée "${escapeHtml(newName)}" existe déjà.`, true);
+                                showToast(`Une équipe nommée "${escapeHtml(newName)}" existe déjà.`, "error");
                                 return;
                             }
                             if (isNaN(newLevel) || newLevel < 1 || newLevel > 10) {
-                                showMessage(messageElement, "Le niveau doit être un nombre entre 1 et 10.", true);
+                                showToast("Le niveau doit être un nombre entre 1 et 10.", "error");
                                 return;
                             }
 
                             teamToEdit.name = newName;
                             teamToEdit.level = newLevel;
-                            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                            renderTeams();
-                            showMessage(messageElement, `Équipe "${escapeHtml(newName)}" mise à jour.`);
+                            saveAllData();
+                            // Render is handled by onSnapshot
+                            // renderTeams();
+                            showToast(`Équipe "${escapeHtml(newName)}" mise à jour.`, "success");
                         });
                     }
                 });
@@ -751,21 +2446,7 @@
             document.querySelectorAll('.delete-team-btn').forEach(button => {
                 button.addEventListener('click', (event) => {
                     const teamId = event.target.dataset.id;
-                    const teamToDelete = allTeams.find(t => t.id === teamId);
-                    if (teamToDelete) {
-                        const messageContent = document.createElement('p');
-                        messageContent.textContent = `Êtes-vous sûr de vouloir supprimer l'équipe "${escapeHtml(teamToDelete.name)}" ? Cette action est irréversible.`;
-                        messageContent.className = 'text-gray-700';
-
-                        showModal('Confirmer la suppression', messageContent, () => {
-                            allTeams = allTeams.filter(team => team.id !== teamId);
-                            // Supprimer l'équipe des éliminées si elle y était
-                            eliminatedTeams.delete(teamId);
-                            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                            renderTeams();
-                            showMessage(messageElement, `Équipe "${escapeHtml(teamToDelete.name)}" supprimée.`);
-                        }, true);
-                    }
+                    deleteTeam(teamId); // Call the unified deleteTeam function
                 });
             });
         }
@@ -773,32 +2454,9 @@
         addTeamBtn.addEventListener('click', () => {
             const name = teamNameInput.value.trim();
             const level = parseInt(teamLevelInput.value);
-
-            if (!name) {
-                showMessage(messageElement, "Le nom de l'équipe ne peut pas être vide.", true);
-                return;
-            }
-            // Check for duplicate name
-            if (teamExists(name)) {
-                showMessage(messageElement, `L'équipe "${escapeHtml(name)}" existe déjà. Veuillez choisir un nom différent.`, true);
-                return;
-            }
-            if (isNaN(level) || level < 1 || level > 10) {
-                showMessage(messageElement, "Le niveau doit être un nombre entre 1 et 10.", true);
-                return;
-            }
-
-            const newTeam = {
-                id: 'team_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
-                name: name,
-                level: level
-            };
-            allTeams.push(newTeam);
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-            renderTeams();
+            addTeam(name, level); // Call the unified addTeam function
             teamNameInput.value = '';
             teamLevelInput.value = '5';
-            showMessage(messageElement, `Équipe "${escapeHtml(name)}" ajoutée avec succès !`);
         });
 
         clearTeamsBtn.addEventListener('click', () => {
@@ -809,16 +2467,17 @@
             showModal('Confirmer la suppression de toutes les équipes', messageContent, () => {
                 allTeams = [];
                 eliminatedTeams.clear(); // Effacer toutes les équipes éliminées
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                renderTeams();
-                showMessage(messageElement, "Toutes les équipes ont été supprimées.");
+                saveAllData();
+                // Render is handled by onSnapshot
+                // renderTeams();
+                showToast("Toutes les équipes ont été supprimées.", "success");
             }, true);
         });
 
         importTeamsBtn.addEventListener('click', () => {
             const file = excelFileInput.files[0];
             if (!file) {
-                showMessage(importMessageElement, "Veuillez sélectionner un fichier Excel.", true);
+                showToast("Veuillez sélectionner un fichier Excel.", "error");
                 return;
             }
 
@@ -859,27 +2518,28 @@
 
                 if (importedCount > 0) {
                     allTeams.push(...newTeams);
-                    saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                    renderTeams();
+                    saveAllData();
+                    // Render is handled by onSnapshot
+                    // renderTeams();
                     let successMsg = `${importedCount} équipe(s) importée(s) avec succès.`;
                     if (skippedNames.length > 0) {
                         successMsg += ` ${failedCount} équipe(s) ignorée(s) (noms déjà existants ou données invalides) : ${skippedNames.map(escapeHtml).join(', ')}.`;
                     }
-                    showMessage(importMessageElement, successMsg);
+                    showToast(successMsg, "success");
                 } else if (json.length > 0) { // If there were rows, but none imported successfully
                      let errorMsg = "Aucune équipe n'a pu être importée.";
                      if (skippedNames.length > 0) {
                          errorMsg += ` Les équipes suivantes existent déjà : ${skippedNames.map(escapeHtml).join(', ')}.`;
                      }
                      errorMsg += " Vérifiez le format des colonnes ('Nom', 'Niveau') et la validité des données (niveau entre 1 et 10).";
-                     showMessage(importMessageElement, errorMsg, true);
+                     showToast(errorMsg, "error");
                 } else { // File was empty or only headers
-                    showMessage(importMessageElement, "Aucune nouvelle équipe n'a été trouvée dans le fichier ou le fichier est vide.", true);
+                    showToast("Aucune nouvelle équipe n'a été trouvée dans le fichier ou le fichier est vide.", "info");
                 }
                 excelFileInput.value = ''; // Clear the input after processing
             };
             reader.onerror = (ex) => {
-                showMessage(importMessageElement, "Erreur lors de la lecture du fichier : " + ex.message, true);
+                showToast("Erreur lors de la lecture du fichier : " + ex.message, "error");
                 console.error("Erreur de lecture de fichier:", ex);
             };
             reader.readAsArrayBuffer(file);
@@ -1077,223 +2737,14 @@
             return options;
         }
 
-        /**
-         * Logic to generate pools based on initial team levels.
-         * @param {Array<Object>} teamsToUse The teams to use for generation.
-         * @param {number} requestedTeamsPerPool The number of teams desired per pool.
-         * @param {HTMLElement} msgElement Element to display messages.
-         * @returns {Object|null} Object containing generated pools and remaining teams count, or null on failure.
-         */
-        function _generatePoolsLogicInitialLevels(teamsToUse, requestedTeamsPerPool, msgElement) {
-            const teamsByExactLevel = new Map();
-            for (let i = 1; i <= 10; i++) {
-                teamsByExactLevel.set(i, shuffleArray(teamsToUse.filter(team => team.level === i)));
-            }
-
-            let maxPoolsThatCanBeFormed = Infinity;
-            let requiredLevelsPresent = true;
-
-            for (let level = 1; level <= requestedTeamsPerPool; level++) {
-                const teamsAtLevel = teamsByExactLevel.get(level);
-                if (!teamsAtLevel || teamsAtLevel.length === 0) {
-                    requiredLevelsPresent = false;
-                    showMessage(msgElement, `Impossible de former des poules de ${requestedTeamsPerPool} équipes: il manque des équipes de niveau ${level}.`, true);
-                    return null;
-                }
-                maxPoolsThatCanBeFormed = Math.min(maxPoolsThatCanBeFormed, teamsAtLevel.length);
-            }
-
-            if (!requiredLevelsPresent) return null;
-
-            const generatedPools = [];
-            for (let i = 0; i < maxPoolsThatCanBeFormed; i++) {
-                const poolName = String.fromCharCode(65 + i);
-                const pool = {
-                    id: 'pool_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
-                    name: "Poule " + poolName,
-                    teams: [],
-                    matches: []
-                };
-
-                for (let level = 1; level <= requestedTeamsPerPool; level++) {
-                    pool.teams.push(teamsByExactLevel.get(level).pop());
-                }
-
-                for (let t1_idx = 0; t1_idx < pool.teams.length; t1_idx++) {
-                    for (let t2_idx = t1_idx + 1; t2_idx < pool.teams.length; t2_idx++) {
-                        pool.matches.push({
-                            team1Id: pool.teams[t1_idx].id,
-                            team1Name: pool.teams[t1_idx].name,
-                            team2Id: pool.teams[t2_idx].id,
-                            team2Name: pool.teams[t2_idx].name,
-                            score1: null,
-                            score2: null,
-                            winnerId: null
-                        });
-                    }
-                }
-                generatedPools.push(pool);
-            }
-
-            let allRemainingTeams = [];
-            teamsByExactLevel.forEach(teamsAtLevel => {
-                allRemainingTeams.push(...teamsAtLevel);
-            });
-            allRemainingTeams = shuffleArray(allRemainingTeams);
-
-            let currentPoolIdxForRemaining = 0;
-            while (allRemainingTeams.length > 0 && generatedPools.length > 0) {
-                if (generatedPools.length === 0) break;
-
-                const pool = generatedPools[currentPoolIdxForRemaining];
-                const teamToAdd = allRemainingTeams.pop();
-
-                if (!pool.teams.some(t => t.id === teamToAdd.id)) { // Prevent adding same team multiple times
-                    pool.teams.push(teamToAdd);
-                    // Add new matches with the newly added team against existing teams in the pool
-                    pool.teams.filter(t => t.id !== teamToAdd.id).forEach(existingTeam => {
-                        pool.matches.push({
-                            team1Id: teamToAdd.id,
-                            team1Name: teamToAdd.name,
-                            team2Id: existingTeam.id,
-                            team2Name: existingTeam.name,
-                            score1: null, score2: null, winnerId: null
-                        });
-                    });
-                }
-                currentPoolIdxForRemaining = (currentPoolIdxForRemaining + 1) % generatedPools.length;
-            }
-            return { pools: generatedPools, remainingTeamsCount: allRemainingTeams.length };
-        }
-
-        /**
-         * Génère des poules basées sur le classement global, en essayant de minimiser les rencontres répétées.
-         * @param {Array<Object>} teamsForThisGroup Les équipes du groupe actuel, avec leurs totaux de points/diff.
-         * @param {number} requestedTeamsPerPool Le nombre d'équipes souhaité par poule.
-         * @param {HTMLElement} msgElement L'élément pour afficher les messages.
-         * @returns {Object|null} Les poules générées et le nombre d'équipes restantes, ou null en cas d'échec.
-         */
-        function _generatePoolsLogicRankingBased(teamsForThisGroup, requestedTeamsPerPool, msgElement) {
-            if (teamsForThisGroup.length === 0) {
-                showMessage(msgElement, "Aucune équipe disponible pour former les poules dans ce groupe.", true);
-                return null;
-            }
-
-            const numInternalTiers = requestedTeamsPerPool; // Represents how many tiers we divide teams into
-            const totalTeamsInGroup = teamsForThisGroup.length;
-
-            if (numInternalTiers < 1) {
-                showMessage(msgElement, "Le nombre d'équipes par poule doit être au moins 1.", true);
-                return null;
-            }
-
-            // Sort teams within the group by their ranking (points, then diff score)
-            const sortedTeamsWithinGroup = [...teamsForThisGroup].sort((a, b) => b.totalPoints - a.totalPoints || b.totalDiffScore - a.totalDiffScore);
-
-            const teamsGroupedByInternalTier = new Map();
-            for(let i = 0; i < numInternalTiers; i++) {
-                teamsGroupedByInternalTier.set(i, []);
-            }
-
-            // Distribute teams evenly into `numInternalTiers` based on their sorted order
-            for (let i = 0; i < totalTeamsInGroup; i++) {
-                const tierIndex = i % numInternalTiers; // Round-robin distribution into tiers
-                teamsGroupedByInternalTier.get(tierIndex).push(sortedTeamsWithinGroup[i]);
-            }
-
-            // Determine the number of pools based on the smallest tier size
-            let minTierSize = Infinity;
-            const tierKeys = Array.from(teamsGroupedByInternalTier.keys()).sort((a,b)=>a-b);
-
-            for (const tier of tierKeys) {
-                const teamsInThisTier = teamsGroupedByInternalTier.get(tier);
-                minTierSize = Math.min(minTierSize, teamsInThisTier.length);
-            }
-
-            if (minTierSize === 0 || minTierSize === Infinity || minTierSize < 1) {
-                showMessage(msgElement, `Pas assez d'équipes pour former des poules équilibrées de ${requestedTeamsPerPool} équipes à partir de ce groupe. Réduisez le nombre d'équipes par poule ou ajoutez des équipes.`, true);
-                return null;
-            }
-
-            const numberOfPools = minTierSize;
-            const generatedPools = [];
-
-            // Generate random offsets for each tier to diversify pool compositions
-            // This is the core change to minimize repetitions: each tier will start its team selection
-            // from a different point, rotating through its members for each pool.
-            const tierOffsets = shuffleArray(Array.from({length: numInternalTiers}, (_, k) => k));
-
-            for (let i = 0; i < numberOfPools; i++) {
-                const poolName = String.fromCharCode(65 + i);
-                const pool = {
-                    id: 'pool_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
-                    name: "Poule " + poolName,
-                    teams: [],
-                    matches: []
-                };
-
-                for (const tier of tierKeys) {
-                    const teamsInThisTier = teamsGroupedByInternalTier.get(tier);
-                    // Apply offset to pick team from tier, ensuring we wrap around if index exceeds length
-                    const actualIndex = (i + tierOffsets[tier]) % teamsInThisTier.length;
-                    
-                    if (teamsInThisTier && teamsInThisTier[actualIndex]) {
-                        // We need to pass the full team object here, not just id/name.
-                        // The `teamsForThisGroup` already contain the original team objects and their calculated scores.
-                        const originalTeam = allTeams.find(t => t.id === teamsInThisTier[actualIndex].id);
-                        if (originalTeam) {
-                            pool.teams.push({
-                                ...originalTeam, // Original team properties (id, name, level)
-                                totalPoints: teamsInThisTier[actualIndex].totalPoints, // Calculated points
-                                totalDiffScore: teamsInThisTier[actualIndex].totalDiffScore // Calculated diff score
-                            });
-                        } else {
-                            console.warn(`Original team data not found for ID: ${teamsInThisTier[actualIndex].id}`);
-                            pool.teams.push(teamsInThisTier[actualIndex]); // Fallback to partial data
-                        }
-                        
-                    } else {
-                        console.warn(`ATTENTION: Tentative de prendre une équipe de tiers vide ou hors limite pour la poule ${pool.name}, tier ${tier}, index ${actualIndex}.`);
-                    }
-                }
-
-                shuffleArray(pool.teams); // Shuffle teams within the pool after selection
-
-                // Generate matches for this pool (round-robin)
-                for (let t1_idx = 0; t1_idx < pool.teams.length; t1_idx++) {
-                    for (let t2_idx = t1_idx + 1; t2_idx < pool.teams.length; t2_idx++) {
-                        pool.matches.push({
-                            team1Id: pool.teams[t1_idx].id,
-                            team1Name: pool.teams[t1_idx].name,
-                            team2Id: pool.teams[t2_idx].id,
-                            team2Name: pool.teams[t2_idx].name,
-                            score1: null,
-                            score2: null,
-                            winnerId: null
-                        });
-                    }
-                }
-                generatedPools.push(pool);
-            }
-
-            let remainingTeamsCount = 0;
-            // Calculate remaining teams (those not used in any pool)
-            teamsGroupedByInternalTier.forEach(group => {
-                remainingTeamsCount += (group.length - numberOfPools);
-            });
-
-            return { pools: generatedPools, remainingTeamsCount: remainingTeamsCount };
-        }
-
-
         // Modified renderPools to accept showRepeats parameter
         function renderPools(pools, phaseName = "Poules Actuelles", phaseId = null, showRepeats = false) {
-            poolsDisplay.innerHTML = '';
-            currentPhaseTitle.textContent = 'Poules de ' + phaseName;
+            APP_CONTAINER.querySelector('#poolsDisplay').innerHTML = ''; // Cible le div #poolsDisplay à l'intérieur de APP_CONTAINER
+            APP_CONTAINER.querySelector('#currentPhaseTitle').textContent = 'Poules de ' + phaseName;
             currentDisplayedPhaseId = phaseId;
 
             if (pools.length === 0) {
-                poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Aucune poule générée pour cette phase.</p>';
+                APP_CONTAINER.querySelector('#poolsDisplay').innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Aucune poule générée pour cette phase.</p>';
                 return;
             }
 
@@ -1402,11 +2853,11 @@
                                     match.winnerId = match.team2Id;
                                 } else {
                                      // Handle tie - for now, no winner, message for user
-                                     showMessage(messageElement, "Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", true);
+                                     showToast("Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", "error");
                                 }
                             }
-                            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                            renderPhaseHistory(); // To update next phase button visibility
+                            saveAllData(); // Use saveAllData
+                            // renderPhaseHistory(); // To update next phase button visibility - handled by onSnapshot
 
                             const team1Span = matchDiv.querySelector('span[data-team-role="team1-name"]');
                             const team2Span = matchDiv.querySelector('span[data-team-role="team2-name"]');
@@ -1424,9 +2875,9 @@
                                 team1Span.classList.add('text-red-700');
                             }
                             if (score1 !== null && score2 !== null && score1 >= 0 && score2 >= 0 && match.winnerId) {
-                                showMessage(messageElement, "Score enregistré automatiquement pour " + escapeHtml(match.team1Name) + " vs " + escapeHtml(match.team2Name) + " !");
+                                showToast("Score enregistré automatiquement pour " + escapeHtml(match.team1Name) + " vs " + escapeHtml(match.team2Name) + " !", "success");
                             } else {
-                                showMessage(messageElement, "Saisie en cours...", false);
+                                showToast("Saisie en cours...", "info");
                             }
 
                         } else {
@@ -1445,34 +2896,16 @@
                     const team2Id = event.target.dataset.team2Id;
                     const team1Name = event.target.dataset.team1Name;
                     const team2Name = event.target.dataset.team2Name;
-                    showRepeatedMatchDetailsModal(team1Name, team2Name, team1Id, team2Id, currentDisplayedPhaseId);
+                    showRepeatedMatchDetailsModal(team1Name, team2Name, team1Id, team2Id, phaseId); // Use passed phaseId
                 });
             });
         }
 
         // Helper function to render pools with current display settings
         function renderPoolsWithCurrentSettings(pools, phaseName, phaseId) {
+            const toggleRepeatedMatchesDisplay = document.getElementById('toggleRepeatedMatchesDisplay');
             const showRepeats = toggleRepeatedMatchesDisplay ? toggleRepeatedMatchesDisplay.checked : false;
             renderPools(pools, phaseName, phaseId, showRepeats);
-        }
-
-        /**
-         * Checks if a given brassage phase is complete (all matches have scores and a winner).
-         * @param {Object} phase The phase object to check.
-         * @returns {boolean} True if the phase is complete, false otherwise.
-         */
-        function isBrassagePhaseComplete(phase) {
-            if (!phase || !phase.generated || !phase.pools) return false;
-            for (const pool of phase.pools) {
-                if (!pool.matches) return false;
-                for (const match of pool.matches) {
-                    // Check if score1 and score2 are valid numbers and winnerId is set
-                    if (match.score1 === null || match.score2 === null || isNaN(match.score1) || isNaN(match.score2) || match.winnerId === null) {
-                        return false;
-                    }
-                }
-            }
-            return true;
         }
 
         function renderPhaseHistory() {
@@ -1544,24 +2977,31 @@
          * Updates the visibility and message of the "Create next brassage phase" button.
          */
         function updateNextPhaseButtonVisibility() {
-            const currentBasis = localStorage.getItem('volleyPoolGenerationBasis');
+            const basisInitialLevelsRadio = document.getElementById('basisInitialLevels');
+            const basisPreviousResultsRadio = document.getElementById('basisPreviousResults');
+            const nextBrassagePhaseContainer = document.getElementById('nextBrassagePhaseContainer');
+            const nextBrassagePhaseMessage = document.getElementById('nextBrassagePhaseMessage');
+
+            // Retrieve the basis from the DOM elements, not localStorage, as localStorage is no longer used for this setting
+            const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
+
             const initialOrSecondaryPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE);
-            initialOrSecondaryPhases.sort((a,b) => a.timestamp - b.timestamp);
+            initialOrSecondaryPhases.sort((a, b) => a.timestamp - b.timestamp);
 
             const lastBrassagePhase = initialOrSecondaryPhases[initialOrSecondaryPhases.length - 1];
             const hasUngeneratedPhase = initialOrSecondaryPhases.some(p => !p.generated);
 
-            if (currentBasis === 'previousResults' && lastBrassagePhase && isBrassagePhaseComplete(lastBrassagePhase) && !hasUngeneratedPhase) {
+            if (selectedBasis === 'previousResults' && lastBrassagePhase && isBrassagePhaseComplete(lastBrassagePhase) && !hasUngeneratedPhase) {
                 nextBrassagePhaseContainer.classList.remove('hidden');
                 nextBrassagePhaseMessage.textContent = "La phase de brassage précédente est complète. Vous pouvez créer la prochaine phase.";
                 nextBrassagePhaseMessage.classList.remove('text-red-500');
                 nextBrassagePhaseMessage.classList.add('text-green-500');
-            } else if (currentBasis === 'previousResults' && lastBrassagePhase && !isBrassagePhaseComplete(lastBrassagePhase)) {
+            } else if (selectedBasis === 'previousResults' && lastBrassagePhase && !isBrassagePhaseComplete(lastBrassagePhase)) {
                 nextBrassagePhaseContainer.classList.remove('hidden');
                 nextBrassagePhaseMessage.textContent = `Veuillez compléter les scores de la phase "${escapeHtml(lastBrassagePhase ? lastBrassagePhase.name : 'Phase Inconnue')}" pour créer la phase suivante.`;
                 nextBrassagePhaseMessage.classList.remove('text-green-500');
                 nextBrassagePhaseMessage.classList.add('text-red-500');
-            } else if (currentBasis === 'previousResults' && hasUngeneratedPhase) {
+            } else if (selectedBasis === 'previousResults' && hasUngeneratedPhase) {
                 nextBrassagePhaseContainer.classList.remove('hidden');
                 nextBrassagePhaseMessage.textContent = `Une phase de brassage est en attente de génération. Veuillez générer ses poules en cliquant sur "Générer les poules".`;
                 nextBrassagePhaseMessage.classList.remove('text-green-500');
@@ -1573,6 +3013,12 @@
         }
 
         function renderSecondaryGroupsPreview(groupNames) {
+            const secondaryGroupsPreviewDisplay = document.getElementById('secondaryGroupsPreviewDisplay');
+            const refreshSecondaryGroupScoresBtn = document.getElementById('refreshSecondaryGroupScoresBtn');
+            const validateSecondaryGroupsBtn = document.getElementById('validateSecondaryGroupsBtn');
+            const generateSecondaryBrassagesBtn = document.getElementById('generateSecondaryBrassagesBtn');
+            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+
             secondaryGroupsPreviewDisplay.innerHTML = '';
             refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide by default, show only if groups are rendered
 
@@ -1583,7 +3029,7 @@
                 generateSecondaryBrassagesBtn.classList.add('hidden');
                 refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
                 currentSecondaryGroupsPreview = {}; // Clear preview if invalid selection
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
+                saveAllData();
                 return;
             }
 
@@ -1639,8 +3085,9 @@
          * This is useful if brassage phase scores have been updated after the preview was generated.
          */
         function updateSecondaryGroupsPreviewDisplayOnly() {
+            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
             if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
-                showMessage(secondaryPreviewMessage, "Aucune prévisualisation de groupe secondaire à actualiser.", true);
+                showToast("Aucune prévisualisation de groupe secondaire à actualiser.", "info");
                 return;
             }
 
@@ -1667,18 +3114,17 @@
             }
 
             // Re-render the secondary groups preview to show updated scores
-            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
             const numGroupsValue = parseInt(numberOfSecondaryGroupsInput.value);
             const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
             const selectedGroupNames = groupNamesMap[numGroupsValue];
             
             renderSecondaryGroupsPreview(selectedGroupNames); // This will redraw the display with updated scores
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
+            saveAllData(); // Save the updated scores in the preview data
 
             if (displayUpdated) {
-                showMessage(secondaryPreviewMessage, "Scores des groupes secondaires actualisés avec les dernières données de classement.", false);
+                showToast("Scores des groupes secondaires actualisés avec les dernières données de classement.", "success");
             } else {
-                showMessage(secondaryPreviewMessage, "Les scores des groupes secondaires sont déjà à jour.", false);
+                showToast("Les scores des groupes secondaires sont déjà à jour.", "info");
             }
         }
 
@@ -1688,343 +3134,20 @@
             allBrassagePhases = allBrassagePhases.filter(phase => phase.id !== phaseIdToDelete);
 
             if (allBrassagePhases.length < initialLength) {
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                renderPhaseHistory();
-                showMessage(messageElement, "La phase a été supprimée avec succès !");
+                saveAllData();
+                // Render is handled by onSnapshot
+                // renderPhaseHistory();
 
                 if (currentDisplayedPhaseId === phaseIdToDelete) {
                     poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
                     currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
                     currentDisplayedPhaseId = null;
                 }
+                showToast("La phase a été supprimée avec succès !", "success");
+
             } else {
-                showMessage(messageElement, "Erreur: Phase non trouvée pour la suppression.", true);
+                showToast("Erreur: Phase non trouvée pour la suppression.", "error");
             }
-        }
-
-        /**
-         * Helper function to generate a single set of pools and evaluate its repetitions.
-         * @param {string} phaseType The type of phase (initial_brassage or secondary_brassage).
-         * @param {Array<Object>} teamsToUse The teams to use for generation.
-         * @param {number} requestedTeamsPerPool The number of teams desired per pool.
-         * @param {HTMLElement} msgElement Element to display messages (for internal generation failures).
-         * @param {string|null} currentPhaseIdToExclude The ID of the phase currently being generated (to exclude from repetition check).
-         * @returns {{pools: Array<Object>|null, repetitions: number, remainingTeamsCount: number}} Object with generated pools, repetition count, and remaining teams.
-         */
-        function generateAndEvaluatePools(phaseType, teamsToUse, requestedTeamsPerPool, msgElement, currentPhaseIdToExclude = null) {
-            let generationResult = null;
-            if (phaseType === PHASE_TYPE_INITIAL) {
-                generationResult = _generatePoolsLogicInitialLevels(teamsToUse, requestedTeamsPerPool, msgElement);
-            } else if (phaseType === PHASE_TYPE_SECONDARY_BRASSAGE) {
-                generationResult = _generatePoolsLogicRankingBased(teamsToUse, requestedTeamsPerPool, msgElement);
-            }
-
-            if (!generationResult || !generationResult.pools) {
-                return { pools: null, repetitions: Infinity, remainingTeamsCount: Infinity };
-            }
-
-            const generatedPools = generationResult.pools;
-
-            // Create a temporary, combined list of phases for evaluation, including the new generated one
-            const phasesForEvaluation = [...allBrassagePhases.filter(p => p.id !== currentPhaseIdToExclude)];
-            
-            // Create a temporary phase representation for the newly generated pools
-            const tempPhaseForEvaluation = {
-                id: currentPhaseIdToExclude || 'temp_phase_for_eval_' + Date.now(),
-                type: phaseType,
-                name: 'Temp Phase for Evaluation',
-                pools: generatedPools,
-                generated: true,
-                timestamp: Date.now() // Use a unique timestamp for uniqueness in the map
-            };
-            phasesForEvaluation.push(tempPhaseForEvaluation);
-
-
-            // Rebuild a temporary match occurrence map including the new pools
-            const tempMatchOccurrenceMap = new Map();
-            phasesForEvaluation.forEach(p => {
-                if (p.generated && p.pools) {
-                    p.pools.forEach(pool => {
-                        pool.matches.forEach(match => {
-                            if (match.team1Id && match.team2Id) {
-                                const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
-                                if (!tempMatchOccurrenceMap.has(matchKey)) {
-                                    tempMatchOccurrenceMap.set(matchKey, new Set());
-                                }
-                                tempMatchOccurrenceMap.get(matchKey).add(p.id);
-                            }
-                        });
-                    });
-                }
-            });
-
-            let currentRepetitions = 0;
-            // Count repetitions specifically within the newly generated pools against ALL OTHER phases
-            tempPhaseForEvaluation.pools.forEach(pool => {
-                pool.matches.forEach(match => {
-                    if (match.team1Id && match.team2Id) {
-                        const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
-                        const occurrences = tempMatchOccurrenceMap.get(matchKey);
-                        // A match is a repetition if it occurs in tempPhaseForEvaluation AND in at least one OTHER phase
-                        if (occurrences && occurrences.has(tempPhaseForEvaluation.id) && Array.from(occurrences).some(id => id !== tempPhaseForEvaluation.id)) {
-                             currentRepetitions++;
-                        }
-                    }
-                });
-            });
-            
-            return { pools: generatedPools, repetitions: currentRepetitions, remainingTeamsCount: generationResult.remainingTeamsCount };
-        }
-
-
-        /**
-         * Unified function to generate pools for any brassage phase.
-         * @param {string} phaseIdToUpdate ID of the phase whose pools are to be generated.
-         */
-        function generatePoolsForPhase(phaseIdToUpdate) {
-            console.log("--- DEBUG: Entering generatePoolsForPhase ---");
-            console.log(`DEBUG: Requested Phase ID to Update: ${phaseIdToUpdate}`);
-
-            if (allTeams.length === 0) {
-                showMessage(messageElement, "Aucune équipe n'a été ajoutée. Veuillez gérer les équipes d'abord.", true);
-                console.log("DEBUG: No teams available, exiting.");
-                return;
-            }
-
-            const requestedTeamsPerPool = parseInt(numPoolsInput.value);
-
-            if (isNaN(requestedTeamsPerPool) || requestedTeamsPerPool < 1) {
-                showMessage(messageElement, "Veuillez entrer un nombre valide d'équipes par poule (au moins 1).", true);
-                console.log("DEBUG: Invalid teams per pool (less than 1), exiting.");
-                return;
-            }
-
-            if (requestedTeamsPerPool > 10) {
-                showMessage(messageElement, "Le nombre d'équipes par poule ne peut pas dépasser 10 (le niveau maximum des équipes).", true);
-                console.log("DEBUG: Teams per pool exceeds max level (10), exiting.");
-                return;
-            }
-
-            const phaseToGenerate = allBrassagePhases.find(p => p.id === phaseIdToUpdate);
-            if (!phaseToGenerate) {
-                showMessage(messageElement, "Erreur: Phase à générer introuvable.", true);
-                console.log(`DEBUG: Phase with ID ${phaseIdToUpdate} not found, exiting.`);
-                return;
-            }
-            console.log(`DEBUG: Phase to generate found: ${phaseToGenerate.name} (Type: ${phaseToGenerate.type})`);
-
-            // Get sorted list of actual brassage phases (initial and secondary)
-            const sortedActualBrassagePhases = allBrassagePhases
-                .filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE)
-                .sort((a, b) => a.timestamp - b.timestamp);
-            
-            const currentPhaseIndexInSorted = sortedActualBrassagePhases.findIndex(p => p.id === phaseIdToUpdate);
-            // Check if this is the absolute first brassage phase created by chronological order
-            const isFirstActualBrassagePhaseOverall = currentPhaseIndexInSorted === 0;
-            console.log(`DEBUG: Is this the first *overall* brassage phase? ${isFirstActualBrassagePhaseOverall}`);
-
-            // Get the user's selected pool generation basis directly from localStorage
-            // We read it fresh every time to avoid caching issues.
-            const selectedBasis = localStorage.getItem('volleyPoolGenerationBasis');
-            console.log(`DEBUG: User's selected basis from localStorage (volleyPoolGenerationBasis): "${selectedBasis}"`);
-
-            let effectiveUseInitialLevels;
-
-            if (isFirstActualBrassagePhaseOverall) {
-                // The very first brassage phase (initial or secondary, though usually initial) MUST use initial levels.
-                effectiveUseInitialLevels = true;
-                showMessage(basisMessageElement, "La toute première phase de brassage utilise toujours les niveaux initiaux des équipes.", false);
-                console.log("DEBUG: This is the first *overall* brassage phase. Forcing effectiveUseInitialLevels = true.");
-            } else if (phaseToGenerate.type === PHASE_TYPE_SECONDARY_BRASSAGE) {
-                // Secondary brassage phases always derive from previous results.
-                effectiveUseInitialLevels = false;
-                console.log("DEBUG: Phase type is SECONDARY_BRASSAGE. Forcing effectiveUseInitialLevels = false.");
-            } else if (phaseToGenerate.type === PHASE_TYPE_INITIAL) {
-                // For subsequent initial brassage phases, respect the user's chosen basis.
-                effectiveUseInitialLevels = (selectedBasis === 'initialLevels');
-                console.log(`DEBUG: Phase type is INITIAL_BRASSAGE (not first overall). EffectiveUseInitialLevels based on selectedBasis: ${effectiveUseInitialLevels}.`);
-            } else {
-                // Fallback for any other unexpected phase type, default to initial levels or throw error
-                effectiveUseInitialLevels = true; // Safe default
-                console.warn(`DEBUG: Unknown phase type encountered (${phaseToGenerate.type}). Defaulting to initial levels.`);
-            }
-
-            console.log(`DEBUG: Final effectiveUseInitialLevels for this generation attempt: ${effectiveUseInitialLevels}`);
-
-            // Now, apply the check for previous results only if the effective method for THIS phase is 'previousResults'
-            if (!effectiveUseInitialLevels) { // This means the effective method for this generation is 'previousResults'
-                const previousBrassagePhase = sortedActualBrassagePhases[currentPhaseIndexInSorted - 1];
-                console.log(`DEBUG: Effective method is 'previousResults'. Checking previous phase completion.`);
-                if (!previousBrassagePhase) {
-                    showMessage(messageElement, "Erreur logique: La phase précédente est introuvable pour une génération basée sur les résultats.", true);
-                    console.log("DEBUG: Previous phase not found for results-based generation, exiting.");
-                    return;
-                }
-                console.log(`DEBUG: Previous phase to check: ${previousBrassagePhase.name} (ID: ${previousBrassagePhase.id})`);
-                if (!isBrassagePhaseComplete(previousBrassagePhase)) {
-                    showMessage(messageElement, `Veuillez compléter tous les scores de la phase précédente ("${escapeHtml(previousBrassagePhase.name)}") avant de générer les poules basées sur les résultats.`, true);
-                    console.log(`DEBUG: Previous phase (${previousBrassagePhase.name}) is NOT complete, exiting.`);
-                    return;
-                }
-                console.log(`DEBUG: Previous phase (${previousBrassagePhase.name}) IS complete.`);
-            }
-            
-            // Determine the actual teams to use for generation
-            const teamsForGeneration = effectiveUseInitialLevels ? allTeams : (function() {
-                const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
-                const teamsWithScores = globalRankings.filter(r => r.totalPoints !== 0 || r.totalDiffScore !== 0).map(r => ({
-                    id: r.teamObject.id,
-                    name: r.teamObject.name,
-                    level: r.teamObject.level,
-                    totalPoints: r.totalPoints,
-                    totalDiffScore: r.totalDiffScore
-                }));
-                // If there are no teams with scores, fall back to all teams but warn
-                if (teamsWithScores.length === 0 && !isFirstActualBrassagePhaseOverall) {
-                    showMessage(messageElement, "Aucune équipe avec des scores enregistrés pour générer des poules basées sur les résultats précédents. Les niveaux initiaux seront utilisés.", true);
-                    console.log("DEBUG: No teams with scores for results-based generation, falling back to all teams.");
-                    return allTeams; // Fallback
-                }
-                console.log(`DEBUG: Teams for generation based on scores (${teamsWithScores.length} teams):`, teamsWithScores.map(t => `${t.name} (Pts: ${t.totalPoints}, Diff: ${t.totalDiffScore})`).join(', '));
-                return teamsWithScores.length > 0 ? teamsWithScores : allTeams; // Use teamsWithScores if available, else allTeams
-            })();
-
-            if (teamsForGeneration.length === 0) {
-                 showMessage(messageElement, "Aucune équipe disponible pour générer des poules.", true);
-                 console.log("DEBUG: No teams for generation, exiting.");
-                 return;
-            }
-            if (teamsForGeneration.length < requestedTeamsPerPool) {
-                showMessage(messageElement, `Pas assez d'équipes (${teamsForGeneration.length}) pour former des poules de ${requestedTeamsPerPool} équipes. Réduisez le nombre d'équipes par poule ou ajoutez des équipes.` + (effectiveUseInitialLevels ? "" : " Assurez-vous d'avoir suffisamment d'équipes avec des scores valides."), true);
-                console.log("DEBUG: Not enough teams for requested pools, exiting.");
-                return;
-            }
-
-
-            const MAX_ATTEMPTS = 20; // Number of times to try generating pools
-            let bestPools = null;
-            let minRepetitions = Infinity;
-            let bestRemainingTeamsCount = Infinity;
-            console.log(`DEBUG: Starting pool generation attempts (max ${MAX_ATTEMPTS})...`);
-
-            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-                // Generate and evaluate potential pools
-                const result = generateAndEvaluatePools(phaseToGenerate.type, teamsForGeneration, requestedTeamsPerPool, messageElement, phaseIdToUpdate);
-                
-                if (result.pools) {
-                    // Prioritize fewer repetitions, then fewer remaining teams
-                    if (result.repetitions < minRepetitions) {
-                        minRepetitions = result.repetitions;
-                        bestPools = result.pools;
-                        bestRemainingTeamsCount = result.remainingTeamsCount;
-                    } else if (result.repetitions === minRepetitions && result.remainingTeamsCount < bestRemainingTeamsCount) {
-                        // If repetitions are the same, prefer fewer unassigned teams
-                        minRepetitions = result.repetitions; // Redundant but for clarity
-                        bestPools = result.pools;
-                        bestRemainingTeamsCount = result.remainingTeamsCount;
-                    }
-                    
-                    // If we found a perfect solution (0 repetitions), no need to try further
-                    if (minRepetitions === 0 && bestRemainingTeamsCount === 0) { // Also ensure all teams assigned
-                         console.log(`DEBUG: Optimal solution found in ${attempt + 1} attempts.`);
-                         break;
-                    }
-                }
-            }
-
-            if (!bestPools) {
-                showMessage(messageElement, "Impossible de générer des poules valides après plusieurs tentatives. Vérifiez le nombre d'équipes et les paramètres.", true);
-                console.log("DEBUG: Failed to generate valid pools after all attempts, exiting.");
-                return;
-            }
-
-            const phaseIndex = allBrassagePhases.findIndex(p => p.id === phaseIdToUpdate);
-            if (phaseIndex > -1) {
-                allBrassagePhases[phaseIndex].pools = bestPools;
-                allBrassagePhases[phaseIndex].generated = true; 
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                renderPhaseHistory();
-                renderPoolsWithCurrentSettings(bestPools, allBrassagePhases[phaseIndex].name, phaseIdToUpdate);
-
-                let successMessage = bestPools.length + " poule(s) générée(s) avec succès pour cette phase ! ";
-                if (minRepetitions > 0) {
-                    successMessage += `Ceci a entraîné ${minRepetitions} rencontre(s) répétée(s) (minimum trouvé après ${MAX_ATTEMPTS} tentatives).`;
-                } else {
-                    successMessage += `Aucune rencontre répétée détectée dans cette phase.`;
-                }
-                if (bestRemainingTeamsCount > 0) {
-                    successMessage += ` ${bestRemainingTeamsCount} équipe(s) n'ont pas pu être assignée(s) à une poule.`;
-                }
-                showMessage(messageElement, successMessage);
-                console.log("DEBUG: Pool generation successful.");
-            } else {
-                showMessage(messageElement, "Erreur: Phase à générer introuvable après les vérifications.", true);
-                console.log("DEBUG: Phase not found after final checks, exiting.");
-            }
-            console.log("--- DEBUG: Exiting generatePoolsForPhase ---");
-        }
-
-
-        // Renommage de la fonction `previewSecondaryGroups` en `_performSecondaryGroupsPreview`
-        // et ajout d'un wrapper `previewSecondaryGroups` pour la modale d'avertissement.
-        function _performSecondaryGroupsPreview() {
-            const numGroups = parseInt(numberOfSecondaryGroupsInput.value);
-            if (isNaN(numGroups) || (numGroups !== 2 && numGroups !== 3)) {
-                showMessage(secondaryPreviewMessage, "Veuillez choisir 2 ou 3 groupes de niveau pour la création.", true);
-                secondaryGroupsPreviewDisplay.innerHTML = '';
-                validateSecondaryGroupsBtn.classList.add('hidden');
-                generateSecondaryBrassagesBtn.classList.add('hidden');
-                refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
-                currentSecondaryGroupsPreview = {}; // Clear preview if invalid selection
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                return;
-            }
-
-            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
-            if (globalRankings.length === 0) {
-                showMessage(secondaryPreviewMessage, "Aucune équipe classée disponible pour créer les groupes. Générez et terminez des phases de brassage initiales d'abord.", true);
-                secondaryGroupsPreviewDisplay.innerHTML = '';
-                validateSecondaryGroupsBtn.classList.add('hidden');
-                generateSecondaryBrassagesBtn.classList.add('hidden');
-                refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
-                currentSecondaryGroupsPreview = {}; // Clear preview if no rankings
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                return;
-            }
-
-            currentSecondaryGroupsPreview = {}; // Reset for new preview
-            const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
-            const selectedGroupNames = groupNamesMap[numGroups];
-
-            const teamsToDistribute = [...globalRankings];
-            const totalTeams = teamsToDistribute.length;
-            const baseGroupSize = Math.floor(totalTeams / numGroups);
-            let remainder = totalTeams % numGroups;
-            let currentTeamIndex = 0;
-
-            for (let i = 0; i < numGroups; i++) {
-                const groupName = selectedGroupNames[i];
-                currentSecondaryGroupsPreview[groupName] = [];
-                const currentSize = baseGroupSize + (remainder > 0 ? 1 : 0);
-                if (remainder > 0) remainder--;
-
-                for (let j = 0; j < currentSize; j++) {
-                    if (teamsToDistribute[currentTeamIndex]) {
-                        const teamForPreview = {
-                            ...teamsToDistribute[currentTeamIndex].teamObject,
-                            totalPoints: teamsToDistribute[currentTeamIndex].totalPoints,
-                            totalDiffScore: teamsToDistribute[currentTeamIndex].totalDiffScore,
-                            previewGroup: groupName
-                        };
-                        currentSecondaryGroupsPreview[groupName].push(teamForPreview);
-                    }
-                    currentTeamIndex++;
-                }
-            }
-
-            renderSecondaryGroupsPreview(selectedGroupNames);
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-            showMessage(secondaryPreviewMessage, `Création des ${numGroups} groupes de niveau terminée. Ajustez si nécessaire.`);
         }
 
         // Wrapper pour `_performSecondaryGroupsPreview` avec avertissement
@@ -2042,389 +3165,29 @@
             }
         }
 
-        /**
-         * NOUVELLE FONCTION: Affiche une modale avec les options pour une équipe spécifique.
-         * Permet de déplacer l'équipe ou de changer son statut d'élimination.
-         * @param {string} teamId L'ID de l'équipe.
-         * @param {string} teamName Le nom de l'équipe.
-         * @param {number} totalPoints Les points totaux de l'équipe.
-         * @param {number} totalDiffScore La différence de score totale de l'équipe.
-         * @param {string} currentGroup Le groupe actuel de l'équipe.
-         * @param {Array<string>} allGroupNames Tous les noms de groupes possibles.
-         */
-        function showTeamOptionsModal(teamId, teamName, totalPoints, totalDiffScore, currentGroup, allGroupNames) {
-            const isCurrentlyEliminated = eliminatedTeams.has(teamId);
-            const teamStatusText = isCurrentlyEliminated ? 'Actuellement **Éliminée**' : 'Actuellement **En Jeu**';
-            const toggleEliminationAction = isCurrentlyEliminated ? 'Remettre en jeu' : 'Éliminer';
-            const toggleEliminationColor = isCurrentlyEliminated ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700';
-
-            const modalContentDiv = document.createElement('div');
-            modalContentDiv.className = 'space-y-4 text-gray-700';
-            modalContentDiv.innerHTML = `
-                <p class="text-md">Options pour <span class="font-bold">${escapeHtml(teamName)}</span> (Pts: ${totalPoints}, Diff: ${totalDiffScore})</p>
-                <p class="text-sm font-semibold">${teamStatusText}</p>
-                <div class="flex flex-col space-y-2 mt-4">
-                    <button id="moveTeamOptionBtn" class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition ease-in-out duration-150">
-                        Déplacer l'équipe dans un autre groupe
-                    </button>
-                    <button id="toggleEliminationOptionBtn" class="${toggleEliminationColor} text-white py-2 px-4 rounded-md transition ease-in-out duration-150">
-                        ${toggleEliminationAction} cette équipe
-                    </button>
-                </div>
-            `;
-
-            // On ne passe pas de confirmCallback directe à showModal ici,
-            // car les boutons de la modale interne auront leurs propres callbacks.
-            // On utilise une modale "neutre" pour le conteneur.
-            showModal(`Gérer l'équipe : ${escapeHtml(teamName)}`, modalContentDiv, () => { /* Aucune action par défaut */ });
-
-            document.getElementById('moveTeamOptionBtn').addEventListener('click', () => {
-                hideModal(); // Cacher la modale d'options
-                showMoveTeamModal(teamId, teamName, currentGroup, totalPoints, totalDiffScore, allGroupNames);
-            });
-
-            document.getElementById('toggleEliminationOptionBtn').addEventListener('click', () => {
-                if (eliminatedTeams.has(teamId)) {
-                    eliminatedTeams.delete(teamId);
-                    showMessage(secondaryPreviewMessage, `${escapeHtml(teamName)} remise en jeu.`);
-                } else {
-                    eliminatedTeams.add(teamId);
-                    showMessage(secondaryPreviewMessage, `${escapeHtml(teamName)} éliminée.`);
-                }
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                // Re-render la prévisualisation des groupes secondaires pour que les changements soient visibles
-                const numGroupsValue = parseInt(localStorage.getItem('volleySecondaryGroupsSelection') || numberOfSecondaryGroupsInput.value);
-                const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
-                renderSecondaryGroupsPreview(groupNamesMap[numGroupsValue]);
-                hideModal(); // Cacher la modale après l'action
-            });
-
-            // Ajuster les boutons de la modale principale pour qu'ils ne fassent rien
-            // lorsque cette modale d'options est ouverte.
-            // La "confirmCallback" passée à showModal était déjà vide, donc pas de conflit ici.
-            // Le bouton de confirmation de showModal restera visible mais inactif si aucune action n'y est assignée.
-            // On s'assure qu'il n'exécute rien de la modale parente.
-            modalConfirmBtn.onclick = () => hideModal(); // Just hide the modal if the main confirm is clicked
-            modalCancelBtn.onclick = () => hideModal(); // Just hide the modal if the main cancel is clicked
-        }
-
-
-        function showMoveTeamModal(teamId, teamName, currentGroup, totalPoints, totalDiffScore, allGroupNames) {
-            const formDiv = document.createElement('div');
-            formDiv.className = 'space-y-4';
-            formDiv.innerHTML = `
-                <p class="text-gray-700">Déplacer l'équipe <span class="font-bold">${escapeHtml(teamName)}</span> (Pts: ${totalPoints}, Diff: ${totalDiffScore}) :</p>
-                <div>
-                    <label for="moveTeamGroupSelect" class="block text-sm font-medium text-gray-700 mb-1">Nouveau groupe :</label>
-                    <select id="moveTeamGroupSelect"
-                            class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
-                    </select>
-                </div>
-                <p id="moveModalMessage" class="text-sm text-center"></p>
-            `;
-            const groupSelect = formDiv.querySelector('#moveTeamGroupSelect');
-
-            allGroupNames.forEach(groupName => {
-                const option = document.createElement('option');
-                option.value = groupName;
-                option.textContent = groupName;
-                if (groupName === currentGroup) {
-                    option.selected = true;
-                }
-                groupSelect.appendChild(option);
-            });
-
-            showModal('Déplacer l\'équipe', formDiv, async () => {
-                const newGroup = groupSelect.value;
-                const moveModalMessage = document.getElementById('moveModalMessage');
-
-                if (newGroup === currentGroup) {
-                    return; // hideModal is handled by showModal's callback
-                }
-
-                moveTeamBetweenSecondaryGroups(teamId, currentGroup, newGroup);
-            });
-        }
-
-        function moveTeamBetweenSecondaryGroups(teamId, fromGroup, toGroup) {
-            if (fromGroup === toGroup) return;
-
-            let teamToMove = null;
-            currentSecondaryGroupsPreview[fromGroup] = currentSecondaryGroupsPreview[fromGroup].filter(team => {
-                if (team.id === teamId) {
-                    teamToMove = team;
-                    return false;
-                }
-                return true;
-            });
-
-            if (teamToMove) {
-                teamToMove.previewGroup = toGroup;
-                if (!currentSecondaryGroupsPreview[toGroup]) {
-                    currentSecondaryGroupsPreview[toGroup] = [];
-                }
-                currentSecondaryGroupsPreview[toGroup].push(teamToMove);
-
-                // Re-sort the destination group to maintain rank order for display/future logic
-                currentSecondaryGroupsPreview[toGroup].sort((a, b) => b.totalPoints - a.totalPoints || b.totalDiffScore - a.totalDiffScore);
-
-                const numGroupsValue = parseInt(localStorage.getItem('volleySecondaryGroupsSelection') || numberOfSecondaryGroupsInput.value);
-                const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
-                renderSecondaryGroupsPreview(groupNamesMap[numGroupsValue]);
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                showMessage(secondaryPreviewMessage, `Équipe ${escapeHtml(teamToMove.name)} déplacée vers ${escapeHtml(toGroup)}.`);
-
-            } else {
-                console.error("ERROR: Team not found for movement:", teamId);
-            }
-        }
-
-        function validateSecondaryGroupsForElimination() {
-            const messageContent = document.createElement('p');
-            messageContent.textContent = "Confirmer la composition actuelle des groupes pour les phases éliminatoires ? Cette action enregistre ce regroupement.";
-            messageContent.className = 'text-gray-700';
-
-            showModal('Valider les Groupes', messageContent, () => {
-                if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
-                    showMessage(secondaryPreviewMessage, "Aucun groupe à valider. Créez les groupes d'abord.", true);
-                    return; // hideModal is handled by showModal's callback
-                }
-
-                // Remove only existing elimination seeding phases to avoid duplicates if re-validating
-                allBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING);
-
-                const eliminationSeedingPhase = {
-                    id: `${PHASE_TYPE_ELIMINATION_SEEDING}_${Date.now()}`,
-                    type: PHASE_TYPE_ELIMINATION_SEEDING, // Ensure type is correct
-                    name: `Répartition Éliminatoire Validée (${new Date().toLocaleDateString('fr-FR')})`,
-                    timestamp: Date.now(),
-                    groupedTeams: JSON.parse(JSON.stringify(currentSecondaryGroupsPreview)), // Deep copy
-                    generated: true // Mark as generated/validated
-                };
-                allBrassagePhases.push(eliminationSeedingPhase);
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                showMessage(secondaryPreviewMessage, "Répartition des groupes validée et enregistrée pour les éliminatoires !");
-            });
-        }
-
-        // NOUVELLE FONCTION : Validation directe pour l'élimination
-        function validateForDirectElimination() {
-            const messageContent = document.createElement('p');
-            messageContent.innerHTML = `
-                Êtes-vous sûr de vouloir valider toutes les équipes (non éliminées)
-                pour la phase éliminatoire en vous basant sur le classement général ?
-                <br>
-                **Attention :** Cette action écrasera toute configuration de groupes secondaires préalablement validée
-                et passera les équipes sélectionnées à l'étape éliminatoire principale.
-            `;
-            messageContent.className = 'text-gray-700';
-
-            showModal('Confirmer la validation directe pour l\'élimination', messageContent, () => {
-                if (allTeams.length === 0) {
-                    showMessage(directEliminationMessage, "Aucune équipe enregistrée. Veuillez ajouter des équipes d'abord.", true);
-                    return;
-                }
-
-                const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
-                if (globalRankings.length === 0) {
-                    showMessage(directEliminationMessage, "Aucune équipe classée disponible. Veuillez générer et terminer des phases de brassage d'abord.", true);
-                    return;
-                }
-
-                // Filter out eliminated teams from the rankings
-                const eligibleTeams = globalRankings.filter(rankEntry => !eliminatedTeams.has(rankEntry.teamObject.id));
-
-                if (eligibleTeams.length === 0) {
-                    showMessage(directEliminationMessage, "Aucune équipe éligible (non éliminée) trouvée pour la phase éliminatoire.", true);
-                    return;
-                }
-
-                // Create a single group for all eligible teams
-                const directEliminationGroup = {
-                    "Principale": eligibleTeams.map(r => ({
-                        ...r.teamObject, // Original team properties (id, name, level)
-                        totalPoints: r.totalPoints, // Calculated points
-                        totalDiffScore: r.totalDiffScore, // Calculated diff score
-                        previewGroup: "Principale" // Indicate they belong to the main group
-                    }))
-                };
-                
-                // Clear any existing secondary groups preview data
-                currentSecondaryGroupsPreview = {}; 
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-
-                // Remove only existing elimination seeding phases to avoid duplicates if re-validating
-                allBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING);
-
-                const eliminationSeedingPhase = {
-                    id: `${PHASE_TYPE_ELIMINATION_SEEDING}_${Date.now()}_direct`,
-                    type: PHASE_TYPE_ELIMINATION_SEEDING,
-                    name: `Validation Élimination Directe (${new Date().toLocaleDateString('fr-FR')})`,
-                    timestamp: Date.now(),
-                    groupedTeams: directEliminationGroup, // Use the single main group
-                    generated: true
-                };
-
-                allBrassagePhases.push(eliminationSeedingPhase);
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                showMessage(directEliminationMessage, "Toutes les équipes éligibles validées pour l'élimination directe !");
-                window.location.hash = '#eliminatoires'; // Redirect to elimination page
-            }, true); // Use red style for confirmation as it overwrites
-        }
-
-
-        function generateSecondaryBrassagePhases() {
-            console.log("DEBUG: Lancement de generateSecondaryBrassagePhases...");
-
-            const teamsPerPoolForNewPhases = parseInt(numPoolsInput.value);
-
-            if (isNaN(teamsPerPoolForNewPhases) || teamsPerPoolForNewPhases < 1) {
-                showMessage(secondaryPreviewMessage, "Veuillez entrer un nombre valide d'équipes par poule (au moins 1) pour les phases secondaires.", true);
-                return;
-            }
-
-            if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
-                showMessage(secondaryPreviewMessage, "Veuillez d'abord créer les groupes de brassage secondaires.", true);
-                return;
-            }
-
-            const newPhases = [];
-            const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
-            const numGroups = parseInt(numberOfSecondaryGroupsInput.value);
-            const selectedGroupNames = groupNamesMap[numGroups];
-
-            let generationFailed = false;
-
-            for (const groupName of selectedGroupNames) {
-                const teamsInThisGroup = currentSecondaryGroupsPreview[groupName];
-                console.log(`DEBUG: Traitement du groupe: ${groupName} avec ${teamsInThisGroup ? teamsInThisGroup.length : 0} équipes.`);
-
-                if (!teamsInThisGroup || teamsInThisGroup.length < teamsPerPoolForNewPhases) {
-                    showMessage(secondaryPreviewMessage, `Le groupe "${escapeHtml(groupName)}" n'a pas assez d'équipes pour former des poules de ${teamsPerPoolForNewPhases} équipes. (${teamsInGroup.length} équipes disponibles)`, true);
-                    generationFailed = true;
-                    break;
-                }
-                // Use the retry logic for secondary brassage generation too
-                const MAX_ATTEMPTS = 20;
-                let bestResult = null;
-                let minReps = Infinity;
-                let bestRemCount = Infinity;
-
-                for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-                    const result = generateAndEvaluatePools(PHASE_TYPE_SECONDARY_BRASSAGE, teamsInThisGroup, teamsPerPoolForNewPhases, secondaryPreviewMessage);
-                    if (result.pools) {
-                        if (result.repetitions < minReps) {
-                            minReps = result.repetitions;
-                            bestResult = result;
-                        } else if (result.repetitions === minReps && result.remainingTeamsCount < bestRemCount) {
-                            minReps = result.repetitions; // Redundant but for clarity
-                            bestResult = result;
-                        }
-                        if (minReps === 0 && bestRemCount === 0) break;
-                    }
-                }
-
-                if (bestResult && bestResult.pools.length > 0) {
-                    const newPhase = {
-                        id: `${PHASE_TYPE_SECONDARY_BRASSAGE}_${Date.now()}_${groupName.replace(/\s/g, '_')}`,
-                        type: PHASE_TYPE_SECONDARY_BRASSAGE,
-                        name: `Brassage ${groupName}`, // Nom sans la date
-                        pools: bestResult.pools,
-                        generated: true,
-                        timestamp: Date.now() + newPhases.length // Ensure unique timestamp for ordering
-                    };
-                    newPhases.push(newPhase);
-                } else {
-                    showMessage(secondaryPreviewMessage, `Impossible de générer des poules pour le groupe ${escapeHtml(groupName)}. Vérifiez si vous avez suffisamment d'équipes dans ce groupe pour les poules de ${teamsPerPoolForNewPhases} équipes.`, true);
-                    generationFailed = true;
-                    break;
-                }
-            }
-
-            if (!generationFailed && newPhases.length > 0 && newPhases.length === numGroups) {
-                allBrassagePhases.push(...newPhases);
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-                renderPhaseHistory();
-                renderPoolsWithCurrentSettings(newPhases[0].pools, newPhases[0].name, newPhases[0].id);
-                showMessage(secondaryPreviewMessage, `${newPhases.length} phases de brassage secondaires générées avec succès !`);
-            } else if (generationFailed) {
-                console.error("ERREUR: La génération des phases supplémentaires a échoué pour au moins un groupe.");
-            } else {
-                showMessage(secondaryPreviewMessage, "Aucune phase de brassage secondaire n'a pu être générée. Vérifiez vos paramètres et le classement actuel.", true);
-                console.error("ERREUR: Aucune phase secondaire n'a été générée malgré aucune erreur explicite.");
-            }
-        }
-
-        function clearAllPhases() {
-            const messageContent = document.createElement('p');
-            messageContent.textContent = "Êtes-vous sûr de vouloir supprimer TOUTES les phases de brassage (initiales et secondaires) ? Cette action est irréversible.";
-            messageContent.className = 'text-gray-700';
-
-            showModal('Confirmer la suppression de toutes les phases', messageContent, () => {
-                allBrassagePhases = [];
-                currentSecondaryGroupsPreview = {}; // Clear secondary groups preview
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-
-                renderPhaseHistory();
-                poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
-                currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
-                currentDisplayedPhaseId = null;
-                secondaryGroupsPreviewDisplay.innerHTML = '<p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Créer les groupes".</p>';
-                validateSecondaryGroupsBtn.classList.add('hidden');
-                generateSecondaryBrassagesBtn.classList.add('hidden');
-                refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
-                showMessage(messageElement, "Toutes les phases de brassage ont été supprimées.");
-            }, true); // Use red style for confirmation button
-        }
-
         // --- Initialisation et Événements pour la page Brassages ---
 
-        // Load saved settings
-        const savedTeamsPerPool = localStorage.getItem('volleyTeamsPerPoolSetting');
-        if (savedTeamsPerPool) {
-            numPoolsInput.value = savedTeamsPerPool;
-        }
-
-        // Load and set the dropdown for secondary groups
-        const savedSecondaryGroupsSelection = localStorage.getItem('volleySecondaryGroupsSelection');
-        if (savedSecondaryGroupsSelection) {
-            numberOfSecondaryGroupsInput.value = savedSecondaryGroupsSelection;
-        }
-
         // Initialize pool generation basis radio buttons
-        const savedPoolGenerationBasis = localStorage.getItem('volleyPoolGenerationBasis') || 'initialLevels';
-        if (savedPoolGenerationBasis === 'previousResults') {
-            basisPreviousResultsRadio.checked = true;
-        } else {
-            basisInitialLevelsRadio.checked = true;
-        }
-        // Update UI based on initial selection
-        updatePoolGenerationBasisUI();
+        // No longer load from localStorage, rely on default checked or user interaction
+        if (basisInitialLevelsRadio) basisInitialLevelsRadio.checked = true; // Default to initial levels
+        updatePoolGenerationBasisUI(); // Call to set initial state based on default or loaded value
 
 
         // Event listeners for basis selection
         basisInitialLevelsRadio.addEventListener('change', () => {
-            localStorage.setItem('volleyPoolGenerationBasis', 'initialLevels');
+            // localStorage.setItem(POOL_GENERATION_BASIS_KEY, 'initialLevels'); // No longer use localStorage
             updatePoolGenerationBasisUI();
         });
 
         basisPreviousResultsRadio.addEventListener('change', () => {
-            localStorage.setItem('volleyPoolGenerationBasis', 'previousResults');
+            // localStorage.setItem(POOL_GENERATION_BASIS_KEY, 'previousResults'); // No longer use localStorage
             updatePoolGenerationBasisUI();
         });
         
         function updatePoolGenerationBasisUI() {
-        let selectedBasis = localStorage.getItem('volleyPoolGenerationBasis');
-        console.log(`DEBUG: updatePoolGenerationBasisUI - Initial selectedBasis from localStorage: "${selectedBasis}"`);
-
-        // Si selectedBasis est null (première charge) ou "null" (problème de sérialisation), définir une valeur par défaut.
-        if (selectedBasis === null || selectedBasis === "null") {
-            selectedBasis = 'initialLevels'; // Défaut à 'initialLevels'
-            localStorage.setItem('volleyPoolGenerationBasis', selectedBasis); // Enregistrer la valeur par défaut
-            console.log("DEBUG: volleyPoolGenerationBasis was null or 'null', defaulted to 'initialLevels' and saved to localStorage.");
-        }
-        console.log(`DEBUG: updatePoolGenerationBasisUI - Final selectedBasis after default check: "${selectedBasis}"`);
-
+        // Read directly from the DOM elements
+        const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
+        console.log(`DEBUG: updatePoolGenerationBasisUI - Selected basis from DOM: "${selectedBasis}"`);
 
         const initialLevelsRadio = document.getElementById('basisInitialLevels');
         const previousResultsRadio = document.getElementById('basisPreviousResults');
@@ -2454,15 +3217,16 @@
 
         createGlobalPhasesStructureBtn.addEventListener('click', () => {
             const numPhases = parseInt(numberOfGlobalPhasesInput.value);
-            const selectedBasis = localStorage.getItem('volleyPoolGenerationBasis');
+            // Read directly from the DOM elements
+            const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
 
             if (allTeams.length === 0) {
-                showMessage(messageElement, "Aucune équipe n'a été ajoutée. Veuillez gérer les équipes d'abord.", true);
+                showToast("Aucune équipe n'a été ajoutée. Veuillez gérer les équipes d'abord.", "error");
                 return;
             }
 
             if (isNaN(numPhases) || numPhases < 1) {
-                showMessage(messageElement, "Veuillez entrer un nombre valide de phases globales à créer (au moins 1).", true);
+                showToast("Veuillez entrer un nombre valide de phases globales à créer (au moins 1).", "error");
                 return;
             }
 
@@ -2473,15 +3237,15 @@
 
             if (selectedBasis === 'previousResults') {
                 if (existingBrassagePhases.length > 0 && !isBrassagePhaseComplete(lastBrassagePhase)) {
-                     showMessage(messageElement, `La phase "${escapeHtml(lastBrassagePhase.name)}" n'est pas terminée. Veuillez compléter ses scores ou la supprimer pour créer une nouvelle phase.`, true);
+                     showToast(`La phase "${escapeHtml(lastBrassagePhase.name)}" n'est pas terminée. Veuillez compléter ses scores ou la supprimer pour créer une nouvelle phase.`, "error");
                      return;
                 }
                 if (hasUngeneratedPhase) {
-                    showMessage(messageElement, "Une phase de brassage est en attente de génération. Veuillez générer ses poules en cliquant sur 'Générer les poules' ou la supprimer.", true);
+                    showToast("Une phase de brassage est en attente de génération. Veuillez générer ses poules en cliquant sur 'Générer les poules' ou la supprimer.", "error");
                     return;
                 }
                 if (numPhases > 1) { // This case should be prevented by readOnly, but as a safeguard
-                    showMessage(messageElement, "Lorsque la méthode de génération est 'Base sur les résultats cumulés des brassages précédents', vous ne pouvez créer qu'une seule phase à la fois.", true);
+                    showToast("Lorsque la méthode de génération est 'Base sur les résultats cumulés des brassages précédents', vous ne pouvez créer qu'une seule phase à la fois.", "error");
                     numberOfGlobalPhasesInput.value = 1; // Force back to 1
                     return;
                 }
@@ -2507,25 +3271,28 @@
             }
             
             allBrassagePhases.push(...newGlobalPhases);
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-            localStorage.setItem('volleyTeamsPerPoolSetting', numPoolsInput.value);
-            renderPhaseHistory();
-            poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
-            currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
-            currentDisplayedPhaseId = null;
+            saveAllData();
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData
+            // renderPhaseHistory();
+            // poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
+            // currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
+            // currentDisplayedPhaseId = null;
 
             if (selectedBasis === 'previousResults') {
-                 showMessage(messageElement, `Une seule phase ('Phase Globale ${nextPhaseNumber}') a été créée. Veuillez générer ses poules, puis compléter ses scores pour débloquer la création de la phase suivante.`, false);
+                 showToast(`Une seule phase ('Phase Globale ${nextPhaseNumber}') a été créée. Veuillez générer ses poules, puis compléter ses scores pour débloquer la création de la phase suivante.`, "info");
             } else {
-                 showMessage(messageElement, `${numPhases} phases globales créées. Générez les poules pour chaque phase.`);
+                 showToast(`${numPhases} phases globales créées. Générez les poules pour chaque phase.`, "success");
             }
         });
 
         // New event listener for creating the next phase when basis is previousResults
-        createNextBrassagePhaseBtn.addEventListener('click', () => {
-            const selectedBasis = localStorage.getItem('volleyPoolGenerationBasis');
+        createNextBrassagePhaseBtn.addEventListener('click', async () => {
+            // Read directly from the DOM elements
+            const basisInitialLevelsRadio = document.getElementById('basisInitialLevels');
+            const basisPreviousResultsRadio = document.getElementById('basisPreviousResults');
+            const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
             if (selectedBasis !== 'previousResults') {
-                showMessage(nextBrassagePhaseMessage, "Cette option n'est disponible que lorsque la génération est basée sur les résultats précédents.", true);
+                showToast("Cette option n'est disponible que lorsque la génération est basée sur les résultats précédents.", "error");
                 return;
             }
 
@@ -2536,11 +3303,11 @@
             const hasUngeneratedPhase = initialOrSecondaryPhases.some(p => !p.generated);
 
             if (!lastBrassagePhase || !isBrassagePhaseComplete(lastBrassagePhase)) {
-                showMessage(nextBrassagePhaseMessage, `Veuillez compléter tous les scores de la phase "${escapeHtml(lastBrassagePhase ? lastBrassagePhase.name : 'précédente')}" avant de créer la phase suivante.`, true);
+                showToast(`Veuillez compléter tous les scores de la phase "${escapeHtml(lastBrassagePhase ? lastBrassagePhase.name : 'précédente')}" avant de créer la phase suivante.`, "error");
                 return;
             }
             if (hasUngeneratedPhase) {
-                showMessage(nextBrassagePhaseMessage, "Une phase de brassage est en attente de génération. Veuillez générer ses poules en cliquant sur 'Générer les poules' ou la supprimer.", true);
+                showToast("Une phase de brassage est en attente de génération. Veuillez générer ses poules en cliquant sur 'Générer les poules' ou la supprimer.", "error");
                 return;
             }
 
@@ -2555,12 +3322,13 @@
             };
 
             allBrassagePhases.push(newPhase);
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-            renderPhaseHistory();
-            showMessage(nextBrassagePhaseMessage, `Phase Globale ${nextPhaseNumber} créée avec succès !`);
+            await saveAllData();
+            // Render is handled by onSnapshot
+            // renderPhaseHistory();
+            showToast(`Phase Globale ${nextPhaseNumber} créée avec succès !`, "success");
         });
 
-        previewSecondaryGroupsBtn.addEventListener('click', previewSecondaryGroupsWithWarning); // Use the wrapper function
+        previewSecondaryGroupsBtn.addEventListener('click', previewSecondaryGroupsWithWarning);
         numberOfSecondaryGroupsInput.addEventListener('change', () => {
             // If the user changes the number of groups, clear the current preview
             // because the structure might be different.
@@ -2569,7 +3337,7 @@
             validateSecondaryGroupsBtn.classList.add('hidden');
             generateSecondaryBrassagesBtn.classList.add('hidden');
             refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
+            saveAllData();
         });
 
         validateSecondaryGroupsBtn.addEventListener('click', validateSecondaryGroupsForElimination);
@@ -2612,13 +3380,14 @@
 
         // NEW: On page load, if a secondary group preview exists, render it
         if (Object.keys(currentSecondaryGroupsPreview).length > 0) {
-            const numGroupsValue = parseInt(localStorage.getItem('volleySecondaryGroupsSelection') || numberOfSecondaryGroupsInput.value);
+            // The number of groups should be derived from the actual preview, not localStorage
+            const numGroupsInPreview = Object.keys(currentSecondaryGroupsPreview).length;
             const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
-            const selectedGroupNames = groupNamesMap[numGroupsValue];
+            const selectedGroupNames = groupNamesMap[numGroupsInPreview];
             
             // Ensure the dropdown reflects the loaded state
-            if (numberOfSecondaryGroupsInput.value !== numGroupsValue.toString()) {
-                numberOfSecondaryGroupsInput.value = numGroupsValue;
+            if (numberOfSecondaryGroupsInput.value !== numGroupsInPreview.toString()) {
+                numberOfSecondaryGroupsInput.value = numGroupsInPreview;
             }
 
             renderSecondaryGroupsPreview(selectedGroupNames);
@@ -2729,8 +3498,8 @@
             document.querySelectorAll('#eliminationTeamsList input[type="checkbox"]:checked').forEach(checkbox => {
                 eliminatedTeams.add(checkbox.dataset.teamId);
             });
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-            showMessage(eliminationSelectionMessage, "Sélection des équipes éliminées sauvegardée !");
+            saveAllData();
+            showToast("Sélection des équipes éliminées sauvegardée !", "success");
             window.location.hash = '#eliminatoires';
         });
 
@@ -2805,7 +3574,7 @@
                 console.log("DEBUG: Secondary ranking phases found:", latestEliminationSeedingPhase.groupedTeams);
                 return latestEliminationSeedingPhase.groupedTeams;
             } else {
-                showMessage(eliminationMessage, "Aucune phase de classement secondaire (Principale, Consolante, Super Consolante) n'a été validée sur la page 'Brassages'. Veuillez les générer et les valider d'abord.", true);
+                showToast("Aucune phase de classement secondaire (Principale, Consolante, Super Consolante) n'a été validée sur la page 'Brassages'. Veuillez les générer et les valider d'abord.", "error");
                 return null;
             }
         }
@@ -3112,7 +3881,7 @@
             // Prevent score entry if teams are placeholders (BYE, To be determined)
             if ((!targetMatch.team1 || targetMatch.team1.id === null || targetMatch.team1.id === 'BYE') ||
                 !targetMatch.team2 || targetMatch.team2.id === null || targetMatch.team2.id === 'BYE') {
-                showMessage(eliminationMessage, "Ce match est un BYE ou ses équipes ne sont pas encore déterminées. Les scores ne peuvent pas être saisis.", true);
+                showToast("Ce match est un BYE ou ses équipes ne sont pas encore déterminées. Les scores ne peuvent pas être saisis.", "error");
                 event.target.value = (teamNum === '1' ? targetMatch.score1 : targetMatch.score2) || ''; // Reset input to saved value or empty
                 return;
             }
@@ -3135,11 +3904,11 @@
                     targetMatch.winnerId = targetMatch.team2.id;
                     targetMatch.loserId = targetMatch.team1.id;
                 } else {
-                    showMessage(eliminationMessage, "Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", true);
+                    showToast("Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", "error");
                 }
             }
 
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
+            saveAllData();
 
             // Visually update winner/loser classes
             const matchElement = document.querySelector(`[data-match-id="${matchId}"]`);
@@ -3165,9 +3934,9 @@
             renderBracket(targetBracket, document.getElementById(targetBracket.groupType.toLowerCase() + 'Bracket'));
 
             if (targetMatch.winnerId) {
-                showMessage(eliminationMessage, `Score pour ${escapeHtml(targetMatch.team1.name)} vs ${escapeHtml(targetMatch.team2.name)} mis à jour et vainqueur déterminé !`);
+                showToast(`Score pour ${escapeHtml(targetMatch.team1.name)} vs ${escapeHtml(targetMatch.team2.name)} mis à jour et vainqueur déterminé !`, "success");
             } else {
-                showMessage(eliminationMessage, "Saisie du score en cours...", false);
+                showToast("Saisie du score en cours...", "info");
             }
         }
 
@@ -3246,12 +4015,12 @@
                     }
                 });
             });
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
+            saveAllData();
         }
 
         function generateAllEliminationPhases() {
             eliminationBracketsDisplay.innerHTML = '';
-            showMessage(eliminationMessage, "Génération des tournois éliminatoires...");
+            showToast("Génération des tournois éliminatoires...", "info");
 
             const groupedTeams = getTeamsGroupedBySecondaryPhase();
             if (!groupedTeams) {
@@ -3289,8 +4058,8 @@
                 }
             });
 
-            saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
-            showMessage(eliminationMessage, "Phases éliminatoires générées avec succès !");
+            saveAllData();
+            showToast("Phases éliminatoires générées avec succès !", "success");
         }
 
         function resetAllEliminationPhases() {
@@ -3300,9 +4069,9 @@
 
             showModal('Confirmer la réinitialisation complète', messageContent, () => {
                 eliminationPhases = {};
-                saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
+                saveAllData();
                 eliminationBracketsDisplay.innerHTML = '<p class="text-gray-500 text-center">Cliquez sur "Générer les Phases Éliminatoires" pour afficher les tournois.</p>';
-                showMessage(eliminationMessage, "Toutes les phases éliminatoires ont été réinitialisées.");
+                showToast("Toutes les phases éliminatoires ont été réinitialisées.", "success");
             }, true);
         }
 
@@ -3320,18 +4089,18 @@
                     if (eligibleTeamsInGroup.length >= 2) {
                         const newBracketData = generateBracketData(eligibleTeamsInGroup, groupType);
                         eliminationPhases[groupType] = newBracketData;
-                        saveAllDataToFirestore(); // Utilisation de la fonction de sauvegarde Firestore
+                        saveAllData();
                         renderBracket(newBracketData, document.getElementById(groupType.toLowerCase() + 'Bracket'));
-                        showMessage(eliminationMessage, `Phase éliminatoire pour le groupe "${escapeHtml(groupType)}" réinitialisée.`);
+                        showToast(`Phase éliminatoire pour le groupe "${escapeHtml(groupType)}" réinitialisée.`, "success");
                     } else {
-                        showMessage(eliminationMessage, `Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : pas assez d'équipes éligibles (${eligibleTeamsInGroup.length} restante(s)) ou données manquantes.`, true);
+                        showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : pas assez d'équipes éligibles (${eligibleTeamsInGroup.length} restante(s)) ou données manquantes.`, "error");
                         const groupContainer = document.getElementById(groupType.toLowerCase() + 'Bracket');
                         if (groupContainer) {
                              groupContainer.innerHTML = `<p class="text-gray-500 text-center">Aucun tournoi à afficher pour le groupe ${escapeHtml(groupType)}.</p>`;
                         }
                     }
                 } else {
-                     showMessage(eliminationMessage, `Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : groupe non configuré.`, true);
+                     showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : groupe non configuré.`, "error");
                 }
             }, true);
         }
@@ -3355,7 +4124,7 @@
                     eliminationBracketsDisplay.appendChild(messageDiv);
                 }
             });
-            showMessage(eliminationMessage, "Phases éliminatoires chargées depuis la sauvegarde.");
+            showToast("Phases éliminatoires chargées depuis la sauvegarde.", "info");
         } else {
             eliminationBracketsDisplay.innerHTML = '<p class="text-gray-500 text-center">Cliquez sur "Générer les Phases Éliminatoires" pour afficher les tournois.</p>';
         }
@@ -3409,11 +4178,10 @@
                 <h2 class="text-2xl font-semibold text-gray-700 mb-4">Détails des Scores par Phase de Brassage</h2>
                 <div class="mb-4 flex items-center justify-start space-x-2">
                     <input type="checkbox" id="togglePhaseDetails" class="form-checkbox h-4 w-4 text-blue-600">
-                    <label for="togglePhaseDetails" class="text-gray-700 text-sm">Afficher/Masquer les détails par phase</label>
+                    <label for="togglePhaseDetails" class="text-gray-700 text-sm">Afficher les détails par phase</label>
                 </div>
-                <div id="phaseDetailsDisplay" class="space-y-6 hidden">
-                    <!-- Phase detail tables will be injected here -->
-                    <p class="text-gray-500 text-center">Aucun détail par phase disponible.</p>
+                <div id="phaseDetailsDisplay" class="space-y-6">
+                    <p class="text-gray-500 text-center">Activez "Afficher les détails par phase" pour voir les scores par phase.</p>
                 </div>
             </section>
         `;
@@ -3427,172 +4195,520 @@
         const phaseDetailsDisplay = document.getElementById('phaseDetailsDisplay');
 
         function renderRankings() {
-            rankingsTableBody.innerHTML = '';
-            phaseDetailsDisplay.innerHTML = ''; // Clear previous phase details
-
-            if (allTeams.length === 0) {
-                 rankingsTableBody.innerHTML = `
-                    <tr>
-                        <td colspan="4" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
-                            Aucune équipe enregistrée.
-                        </td>
-                    </tr>
-                `;
-                rankingsMessage.textContent = "Veuillez ajouter des équipes sur la page 'Équipes'.";
-                phaseDetailsDisplay.innerHTML = '<p class="text-gray-500 text-center">Aucun détail par phase disponible car aucune équipe n\'est enregistrée.</p>';
-                return;
-            }
-
             const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
 
             if (globalRankings.length === 0) {
-                 rankingsTableBody.innerHTML = `
+                rankingsTableBody.innerHTML = `
                     <tr>
                         <td colspan="4" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
-                            Aucun classement généré. Les phases de brassage n'ont peut-être pas de scores saisis.
+                            Aucune donnée de classement disponible. Générez et complétez les phases de brassage.
                         </td>
                     </tr>
                 `;
-                rankingsMessage.textContent = "Saisissez les scores des matchs de brassage pour voir le classement.";
-                phaseDetailsDisplay.innerHTML = '<p class="text-gray-500 text-center">Aucun détail par phase disponible car aucun score de brassage n\'est saisi.</p>';
+                rankingsMessage.textContent = "Aucune équipe classée pour le moment.";
                 return;
             }
 
-            // Render Global Rankings Table
-            globalRankings.forEach((rankEntry, index) => {
-                const row = document.createElement('tr');
-                row.className = 'hover:bg-gray-50';
-                row.innerHTML = `
-                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${index + 1}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${escapeHtml(rankEntry.teamObject.name)}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${escapeHtml(rankEntry.totalPoints.toString())}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${escapeHtml(rankEntry.totalDiffScore.toString())}</td>
+            rankingsTableBody.innerHTML = globalRankings.map((rankEntry, index) => {
+                const teamName = escapeHtml(rankEntry.teamObject.name);
+                const isEliminated = eliminatedTeams.has(rankEntry.teamObject.id);
+                const teamClass = isEliminated ? 'line-through text-red-600' : 'text-gray-900';
+                const eliminatedText = isEliminated ? ' (Éliminée)' : '';
+
+                return `
+                    <tr>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${index + 1}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm ${teamClass}">${teamName}${eliminatedText}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${rankEntry.totalPoints}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${rankEntry.totalDiffScore}</td>
+                    </tr>
                 `;
-                rankingsTableBody.appendChild(row);
-            });
+            }).join('');
 
-            rankingsMessage.textContent = `${globalRankings.length} équipes classées.`;
+            rankingsMessage.textContent = `Classement général des ${globalRankings.length} équipes.`;
 
-
-            // Render Per-Phase Details
-            const brassagePhasesWithScores = allBrassagePhases.filter(p => 
-                (p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE) && p.generated && p.pools && p.pools.some(pool => pool.matches && pool.matches.length > 0)
-            ).sort((a,b) => a.timestamp - b.timestamp);
-
-            if (brassagePhasesWithScores.length === 0) {
-                 phaseDetailsDisplay.innerHTML = '<p class="text-gray-500 text-center">Aucun détail par phase disponible. Générez et terminez des phases de brassage.</p>';
-            } else {
-                brassagePhasesWithScores.forEach(phase => {
-                    const phaseDiv = document.createElement('div');
-                    phaseDiv.className = 'bg-white p-4 rounded-lg shadow-sm border border-gray-200';
-                    phaseDiv.innerHTML = `
-                        <h3 class="text-xl font-semibold text-gray-800 mb-3">${escapeHtml(phase.name)}</h3>
-                        <div class="overflow-x-auto">
-                            <table class="min-w-full divide-y divide-gray-200">
-                                <thead class="bg-gray-50">
-                                    <tr>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tl-lg">Nom de l'équipe</th>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
-                                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tr-lg">Diff. Score</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="bg-white divide-y divide-gray-200">
-                                    <!-- Teams for this phase will be inserted here -->
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
-                    const tbody = phaseDiv.querySelector('tbody');
-
-                    // Sort teams by points/diff within this specific phase for clarity
-                    const teamsInThisPhaseRanked = [...globalRankings].map(entry => {
-                        const phaseData = entry.detailsByPhase[phase.id] || { points: 0, diffScore: 0 };
-                        return { teamObject: entry.teamObject, points: phaseData.points, diffScore: phaseData.diffScore };
-                    }).sort((a, b) => {
-                        if (b.points !== a.points) return b.points - a.points;
-                        if (b.diffScore !== a.diffScore) return b.diffScore - a.diffScore;
-                        return a.teamObject.name.localeCompare(b.teamObject.name);
-                    });
-
-                    teamsInThisPhaseRanked.forEach(teamEntry => {
-                        const row = document.createElement('tr');
-                        row.className = 'hover:bg-gray-50';
-                        row.innerHTML = `
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${escapeHtml(teamEntry.teamObject.name)}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${escapeHtml(teamEntry.points.toString())}</td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${escapeHtml(teamEntry.diffScore.toString())}</td>
-                        `;
-                        tbody.appendChild(row);
-                    });
-                    phaseDetailsDisplay.appendChild(phaseDiv);
-                });
-            }
+            renderPhaseDetailsSection(globalRankings);
         }
 
-        togglePhaseDetailsCheckbox.addEventListener('change', () => {
-            if (togglePhaseDetailsCheckbox.checked) {
-                phaseDetailsDisplay.classList.remove('hidden');
+        function renderPhaseDetailsSection(globalRankings) {
+            phaseDetailsDisplay.innerHTML = '';
+            if (!togglePhaseDetailsCheckbox.checked) {
+                phaseDetailsDisplay.innerHTML = '<p class="text-gray-500 text-center">Activez "Afficher les détails par phase" pour voir les scores par phase.</p>';
+                return;
+            }
+
+            const relevantPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE);
+
+            if (relevantPhases.length === 0) {
+                phaseDetailsDisplay.innerHTML = '<p class="text-gray-500 text-center">Aucune phase de brassage avec des détails à afficher.</p>';
+                return;
+            }
+
+            // Sort phases by timestamp to display chronologically
+            relevantPhases.sort((a, b) => a.timestamp - b.timestamp);
+
+            relevantPhases.forEach(phase => {
+                const phaseDiv = document.createElement('div');
+                phaseDiv.className = 'bg-white p-4 rounded-lg shadow-md border border-gray-200';
+                phaseDiv.innerHTML = `
+                    <h3 class="text-xl font-semibold text-gray-800 mb-3">${escapeHtml(phase.name)}</h3>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Équipe</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Diff. Score</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <!-- Team details for this phase -->
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                const tbody = phaseDiv.querySelector('tbody');
+
+                // Filter teams that actually participated in this phase
+                const teamsInPhase = globalRankings.filter(rankEntry => rankEntry.detailsByPhase[phase.id]);
+
+                if (teamsInPhase.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="3" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                                Aucune équipe n'a participé ou n'a de score dans cette phase.
+                            </td>
+                        </tr>
+                    `;
+                } else {
+                    // Sort teams within this phase by their performance in THIS phase
+                    teamsInPhase.sort((a, b) => {
+                        const statsA = a.detailsByPhase[phase.id] || { points: 0, diffScore: 0 };
+                        const statsB = b.detailsByPhase[phase.id] || { points: 0, diffScore: 0 };
+                        if (statsB.points !== statsA.points) return statsB.points - statsA.points;
+                        return statsB.diffScore - statsA.diffScore;
+                    });
+
+                    tbody.innerHTML = teamsInPhase.map(rankEntry => {
+                        const stats = rankEntry.detailsByPhase[phase.id] || { points: 0, diffScore: 0 };
+                        const teamName = escapeHtml(rankEntry.teamObject.name);
+                        return `
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${teamName}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stats.points}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stats.diffScore}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+                phaseDetailsDisplay.appendChild(phaseDiv);
+            });
+        }
+
+        togglePhaseDetailsCheckbox.addEventListener('change', renderPhaseDetailsSection.bind(null, getGlobalRankings(allTeams, allBrassagePhases)));
+
+        renderRankings(); // Initial render
+    }
+
+    /**
+     * Affiche le tableau de bord des tournois (créer/sélectionner).
+     */
+    function renderTournamentDashboard() {
+        APP_CONTAINER.innerHTML = `
+            <div class="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
+                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Mes Tournois</h1>
+
+                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Créer un Nouveau Tournoi</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                        <div>
+                            <label for="newTournamentName" class="block text-sm font-medium text-gray-700 mb-1">Nom du Tournoi</label>
+                            <input type="text" id="newTournamentName" placeholder="Nom du tournoi"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <div>
+                            <label for="newTournamentDate" class="block text-sm font-medium text-gray-700 mb-1">Date du Tournoi</label>
+                            <input type="date" id="newTournamentDate"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label for="newTournamentNumTeams" class="block text-sm font-medium text-gray-700 mb-1">Nombre d'équipes prévues</label>
+                            <input type="number" id="newTournamentNumTeams" min="2" value="10" placeholder="Nombre d'équipes"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <div class="md:col-span-2">
+                            <button id="createTournamentBtn"
+                                    class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                                Créer le Tournoi
+                            </button>
+                        </div>
+                    </div>
+                    <p id="createTournamentMessage" class="mt-3 text-sm text-center"></p>
+                </section>
+
+                <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Sélectionner un Tournoi Existant</h2>
+                    <div id="tournamentsList" class="space-y-4">
+                        <p class="text-gray-500 text-center">Aucun tournoi disponible. Créez-en un nouveau !</p>
+                    </div>
+                </section>
+            </div>
+        `;
+        setupTournamentDashboardLogic();
+    }
+
+    /**
+     * Logique du tableau de bord des tournois.
+     */
+    function setupTournamentDashboardLogic() {
+        const newTournamentNameInput = document.getElementById('newTournamentName');
+        const newTournamentDateInput = document.getElementById('newTournamentDate');
+        const newTournamentNumTeamsInput = document.getElementById('newTournamentNumTeams');
+        const createTournamentBtn = document.getElementById('createTournamentBtn');
+        const createTournamentMessage = document.getElementById('createTournamentMessage');
+        const tournamentsListDiv = document.getElementById('tournamentsList');
+
+        createTournamentBtn.addEventListener('click', () => {
+            const name = newTournamentNameInput.value.trim();
+            const date = newTournamentDateInput.value;
+            const numTeams = parseInt(newTournamentNumTeamsInput.value);
+            createNewTournament(name, date, numTeams);
+        });
+
+        function renderTournamentsList() {
+            tournamentsListDiv.innerHTML = '';
+            if (allUserTournaments.length === 0) {
+                tournamentsListDiv.innerHTML = '<p class="text-gray-500 text-center">Aucun tournoi disponible. Créez-en un nouveau !</p>';
+                return;
+            }
+
+            allUserTournaments.forEach(tournament => {
+                const isOwner = tournament.ownerId === window.userId;
+                const isSelected = currentTournamentId === tournament.id;
+                const tourneyDiv = document.createElement('div');
+                tourneyDiv.className = `flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 bg-white border rounded-md shadow-sm ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'}`;
+                
+                let collaboratorEmailsHtml = '';
+                if (tournament.collaboratorEmails && tournament.collaboratorEmails.length > 0) {
+                    collaboratorEmailsHtml = `<p class="text-xs text-gray-600 mt-1">Collaborateurs: ${tournament.collaboratorEmails.map(email => escapeHtml(email)).join(', ')}</p>`;
+                }
+
+                tourneyDiv.innerHTML = `
+                    <div class="flex-grow">
+                        <p class="text-lg font-medium text-gray-800">${escapeHtml(tournament.name)} ${isSelected ? '<span class="text-blue-600 text-sm ml-2">(Actif)</span>' : ''}</p>
+                        <p class="text-sm text-gray-600">Date: ${escapeHtml(tournament.date)} | Équipes prévues: ${escapeHtml(tournament.numTeamsAllowed.toString())}</p>
+                        <p class="text-sm text-gray-600">Propriétaire: ${isOwner ? 'Moi' : (tournament.ownerEmail ? escapeHtml(tournament.ownerEmail) : 'Inconnu')}</p>
+                        ${collaboratorEmailsHtml}
+                    </div>
+                    <div class="flex space-x-2 mt-3 sm:mt-0">
+                        <button data-id="${tournament.id}" class="select-tournament-btn bg-blue-500 text-white px-3 py-1 rounded-md hover:bg-blue-600 text-sm transition duration-150 ${isSelected ? 'opacity-50 cursor-not-allowed' : ''}" ${isSelected ? 'disabled' : ''}>
+                            Sélectionner
+                        </button>
+                        ${isOwner ? `<button data-id="${tournament.id}" class="delete-tournament-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition duration-150">
+                            Supprimer
+                        </button>` : ''}
+                    </div>
+                `;
+                tournamentsListDiv.appendChild(tourneyDiv);
+            });
+
+            document.querySelectorAll('.select-tournament-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    selectTournament(event.target.dataset.id);
+                });
+            });
+
+            document.querySelectorAll('.delete-tournament-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    deleteTournament(event.target.dataset.id);
+                });
+            });
+        }
+
+        // Listen for changes in allUserTournaments and re-render
+        // This is handled by loadAllData which fetches the list on auth state change
+        // and then calls handleLocationHash which calls renderTournamentDashboard.
+        // So, renderTournamentsList is called when the page is rendered.
+        renderTournamentsList();
+    }
+
+    /**
+     * Affiche la page de gestion des collaborateurs.
+     */
+    function renderCollaboratorsPage() {
+        if (!currentTournamentData || currentTournamentData.ownerId !== window.userId) {
+            APP_CONTAINER.innerHTML = `
+                <div class="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10 text-center">
+                    <h1 class="text-2xl font-bold text-gray-800 mb-4">Accès Refusé</h1>
+                    <p class="text-gray-700">Vous devez être le propriétaire du tournoi pour gérer les collaborateurs.</p>
+                    <button onclick="window.location.hash='#home'" class="mt-4 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">Retour à l'accueil</button>
+                </div>
+            `;
+            return;
+        }
+
+        APP_CONTAINER.innerHTML = `
+            <div class="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
+                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Gérer les Collaborateurs du Tournoi</h1>
+                <p class="text-center text-gray-600 mb-6">
+                    Tournoi actuel : <span class="font-semibold">${escapeHtml(currentTournamentData.name)}</span>
+                </p>
+
+                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter un Collaborateur par UID</h2>
+                    <p class="text-gray-600 mb-4">
+                        Pour ajouter un collaborateur avec un accès réel au tournoi (selon les règles de sécurité Firestore),
+                        vous devez connaître son UID Firebase.
+                    </p>
+                    <div class="flex flex-col sm:flex-row gap-4 items-end">
+                        <div class="flex-grow">
+                            <label for="collaboratorUidInput" class="block text-sm font-medium text-gray-700 mb-1">UID du Collaborateur</label>
+                            <input type="text" id="collaboratorUidInput" placeholder="Entrez l'UID Firebase du collaborateur"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <button id="addCollaboratorUidBtn"
+                                class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                            Ajouter par UID
+                        </button>
+                    </div>
+                </section>
+
+                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter un Collaborateur par Email (pour affichage)</h2>
+                    <p class="text-gray-600 mb-4">
+                        Vous pouvez ajouter des adresses e-mail pour suivre les collaborateurs, mais cela ne leur donne
+                        **pas d'accès automatique** au tournoi via les règles de sécurité Firestore. Pour un accès réel,
+                        une fonction Cloud Firebase est nécessaire pour convertir l'email en UID et mettre à jour les règles.
+                    </p>
+                    <div class="flex flex-col sm:flex-row gap-4 items-end">
+                        <div class="flex-grow">
+                            <label for="collaboratorEmailInput" class="block text-sm font-medium text-gray-700 mb-1">Email du Collaborateur</label>
+                            <input type="email" id="collaboratorEmailInput" placeholder="collaborateur@example.com"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <button id="addCollaboratorEmailBtn"
+                                class="bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                            Ajouter par Email
+                        </button>
+                    </div>
+                </section>
+
+                <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Collaborateurs Actuels</h2>
+                    <div id="currentCollaboratorsList" class="space-y-3">
+                        <p class="text-gray-500 text-center">Aucun collaborateur pour ce tournoi.</p>
+                    </div>
+                </section>
+            </div>
+        `;
+        setupCollaboratorsPageLogic();
+    }
+
+    /**
+     * Logique de la page de gestion des collaborateurs.
+     */
+    function setupCollaboratorsPageLogic() {
+        const collaboratorUidInput = document.getElementById('collaboratorUidInput');
+        const addCollaboratorUidBtn = document.getElementById('addCollaboratorUidBtn');
+        const collaboratorEmailInput = document.getElementById('collaboratorEmailInput');
+        const addCollaboratorEmailBtn = document.getElementById('addCollaboratorEmailBtn');
+        const currentCollaboratorsList = document.getElementById('currentCollaboratorsList');
+
+        function renderCollaborators() {
+            currentCollaboratorsList.innerHTML = '';
+            const collaborators = [];
+
+            // Add owner
+            if (currentTournamentData && currentTournamentData.ownerId) {
+                collaborators.push({
+                    type: 'owner',
+                    id: currentTournamentData.ownerId,
+                    display: `${window.auth.currentUser.email} (Moi - Propriétaire)`
+                });
+            }
+
+            // Add collaborators by UID
+            if (currentTournamentData && currentTournamentData.collaboratorIds) {
+                currentTournamentData.collaboratorIds.forEach(uid => {
+                    if (uid !== window.userId && uid !== currentTournamentData.ownerId) { // Exclure le propriétaire et l'utilisateur actuel s'il est déjà propriétaire
+                        collaborators.push({
+                            type: 'uid',
+                            id: uid,
+                            display: `UID: ${escapeHtml(uid)} (Accès réel)`
+                        });
+                    }
+                });
+            }
+
+            // Add collaborators by email (for display only)
+            if (currentTournamentData && currentTournamentData.collaboratorEmails) {
+                currentTournamentData.collaboratorEmails.forEach(email => {
+                    // Avoid duplicating if email corresponds to current user (owner)
+                    if (email !== window.auth.currentUser.email) {
+                        collaborators.push({
+                            type: 'email',
+                            id: email, // Use email as ID for display purposes
+                            display: `Email: ${escapeHtml(email)} (Pour info)`
+                        });
+                    }
+                });
+            }
+
+            if (collaborators.length === 0) {
+                currentCollaboratorsList.innerHTML = '<p class="text-gray-500 text-center">Aucun collaborateur pour ce tournoi.</p>';
+                return;
+            }
+
+            collaborators.forEach(collab => {
+                const collabDiv = document.createElement('div');
+                collabDiv.className = 'flex items-center justify-between p-3 bg-white border border-gray-200 rounded-md shadow-sm';
+                collabDiv.innerHTML = `
+                    <span class="text-gray-800 font-medium flex-grow">${collab.display}</span>
+                    <div class="flex space-x-2 ml-4">
+                        ${collab.type !== 'owner' ? `
+                            <button data-id="${collab.id}" data-type="${collab.type}" class="remove-collaborator-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition duration-150">
+                                Supprimer
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
+                currentCollaboratorsList.appendChild(collabDiv);
+            });
+
+            document.querySelectorAll('.remove-collaborator-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    const collabId = event.target.dataset.id;
+                    const collabType = event.target.dataset.type;
+                    const messageContent = document.createElement('p');
+                    messageContent.textContent = `Êtes-vous sûr de vouloir supprimer ce collaborateur (${escapeHtml(collabId)}) ?`;
+                    messageContent.className = 'text-gray-700';
+
+                    showModal('Confirmer la suppression du collaborateur', messageContent, () => {
+                        if (collabType === 'uid') {
+                            removeCollaboratorByUid(currentTournamentId, collabId);
+                        } else if (collabType === 'email') {
+                            removeCollaboratorByEmailForDisplay(currentTournamentId, collabId);
+                        }
+                    }, true);
+                });
+            });
+        }
+
+        addCollaboratorUidBtn.addEventListener('click', () => {
+            const uid = collaboratorUidInput.value.trim();
+            addCollaboratorByUid(currentTournamentId, uid);
+            collaboratorUidInput.value = '';
+        });
+
+        addCollaboratorEmailBtn.addEventListener('click', () => {
+            const email = collaboratorEmailInput.value.trim();
+            addCollaboratorByEmailForDisplay(currentTournamentId, email);
+            collaboratorEmailInput.value = '';
+        });
+
+        // Initial render and re-render on tournament data change
+        // This is handled by the onSnapshot listener for currentTournamentData
+        renderCollaborators();
+    }
+
+
+    // --- Routage et Initialisation ---
+
+    /**
+     * Gère les changements de hash dans l'URL pour la navigation.
+     */
+    function handleLocationHash() {
+        const path = window.location.hash.substring(1); // Supprime le '#' initial
+        console.log("Navigating to:", path);
+
+        // Mettre à jour la visibilité des liens de navigation en premier
+        updateNavLinksVisibility();
+        updateTournamentDisplay(); // S'assurer que le nom du tournoi est à jour
+
+        // Mise à jour de la classe "active" de la navigation
+        document.querySelectorAll('.nav-link').forEach(link => {
+            const linkPath = link.getAttribute('href').substring(1);
+            if (linkPath === path) {
+                link.classList.add('border-b-2', 'border-blue-200');
             } else {
-                phaseDetailsDisplay.classList.add('hidden');
+                link.classList.remove('border-b-2', 'border-blue-200');
             }
         });
 
-        renderRankings();
-    }
+        // Rediriger si l'utilisateur n'est pas connecté ou n'a pas de tournoi sélectionné
+        if (!window.userId) {
+            if (path !== 'auth') {
+                window.location.hash = '#auth';
+            }
+            renderAuthPage();
+            return;
+        }
 
-    // --- Gestion du Routage SPA ---
+        if (!currentTournamentId && path !== 'tournaments') {
+            window.location.hash = '#tournaments'; // Rediriger vers le tableau de bord des tournois
+            renderTournamentDashboard();
+            return;
+        }
 
-    const routes = {
-        '#home': renderHomePage,
-        '#equipes': renderEquipesPage,
-        '#brassages': renderBrassagesPage,
-        '#eliminatoires': renderEliminatoiresPage,
-        '#elimination-selection': renderEliminationSelectionPage, // Route pour la sélection des équipes éliminées
-        '#classements': renderClassementsPage,
-    };
+        // Si un tournoi est sélectionné, et l'utilisateur est propriétaire, vérifier l'accès à la page des collaborateurs
+        if (path === 'collaborators' && currentTournamentData?.ownerId !== window.userId) {
+            showToast("Vous n'êtes pas le propriétaire de ce tournoi pour gérer les collaborateurs.", "error");
+            window.location.hash = '#home'; // Rediriger vers l'accueil
+            renderHomePage();
+            return;
+        }
 
-    /**
-     * Gère le changement de route en fonction du hash de l'URL.
-     */
-    function handleLocationHash() {
-        let path = window.location.hash || '#home';
-        const renderFunction = routes[path];
-        if (renderFunction) {
-            renderFunction();
-            // Mettre à jour la classe "active" de la navigation
-            document.querySelectorAll('.nav-link').forEach(link => {
-                if (link.getAttribute('href') === path) {
-                    link.classList.add('border-b-2', 'border-blue-200');
-                } else {
-                    link.classList.remove('border-b-2', 'border-blue-200');
-                }
-            });
-        } else {
-            console.warn(`Route inconnue: ${path}. Redirection vers l'accueil.`);
-            window.location.hash = '#home';
+
+        switch (path) {
+            case 'home':
+                renderHomePage();
+                break;
+            case 'equipes':
+                renderEquipesPage();
+                break;
+            case 'brassages':
+                renderBrassagesPage();
+                break;
+            case 'eliminatoires':
+                renderEliminatoiresPage();
+                break;
+            case 'classements':
+                renderClassementsPage();
+                break;
+            case 'elimination-selection':
+                renderEliminationSelectionPage();
+                break;
+            case 'tournaments': // Nouvelle route pour le tableau de bord des tournois
+                renderTournamentDashboard();
+                break;
+            case 'collaborators': // Nouvelle route pour la gestion des collaborateurs
+                renderCollaboratorsPage();
+                break;
+            case 'auth': // Si déjà connecté, rediriger vers le tableau de bord des tournois
+                window.location.hash = '#tournaments';
+                renderTournamentDashboard();
+                break;
+            default:
+                // Si la route est inconnue ou vide, rediriger vers le tableau de bord des tournois
+                console.warn(`Route inconnue: ${path}. Redirection vers le tableau de bord des tournois.`);
+                window.location.hash = '#tournaments';
+                renderTournamentDashboard();
         }
     }
 
     // --- Initialisation de l'Application ---
     document.addEventListener('DOMContentLoaded', () => {
-        // La fonction loadAllData() est maintenant appelée par le script Firebase dans index.html
-        // après que window.db et window.userId sont disponibles.
-        // handleLocationHash() est également appelée par loadAllData().
-
-        // Écouter les changements de hash dans l'URL pour le routage
-        window.addEventListener('hashchange', handleLocationHash);
-
         // Attacher les gestionnaires d'événements pour les boutons de la modale globale
-        // Assurez-vous que modalCancelBtn est bien référencé
         if (modalCancelBtn) {
             modalCancelBtn.addEventListener('click', hideModal);
         } else {
-            console.error("modalCancelBtn non trouvé au chargement du DOM. La modale pourrait ne pas fonctionner correctement.");
+            console.error("modalCancelBtn non trouvé au chargement du DOM.");
         }
+        // Le modalConfirmBtn est géré dynamiquement dans showModal()
 
         // Ajout de la transparence à la barre de navigation lors du défilement
         const navBar = document.querySelector('nav');
-        if (navBar) {
+        if (navBar) { // Vérifier si la navBar existe
             let isScrolled = false;
             window.addEventListener('scroll', () => {
                 if (window.scrollY > 0) {
@@ -3609,7 +4725,55 @@
                     }
                 }
             });
+        } else {
+            console.warn("Barre de navigation (nav) non trouvée.");
         }
+
+        // Fonction de rappel appelée par index.html une fois Firebase initialisé et l'état d'authentification connu
+        window.onFirebaseReady = () => {
+            console.log("Firebase est prêt. Chargement des données et gestion du routage.");
+            if (window.userId) {
+                // Si l'utilisateur est connecté, tenter de charger ses données de tournoi
+                loadAllData(); // Cette fonction gérera la sélection du tournoi actif et le chargement des données
+            } else {
+                // Si non connecté, rediriger vers la page d'authentification
+                handleLocationHash(); // Cela appellera renderAuthPage
+            }
+        };
+
+        // Écouter les changements de hash dans l'URL pour le routage
+        window.addEventListener('hashchange', handleLocationHash);
+
+        // Gestionnaire pour le bouton de déconnexion
+        logoutBtn.addEventListener('click', async () => {
+            try {
+                await window.signOut(window.auth);
+                showToast("Déconnexion réussie !", "info");
+                // Réinitialiser les variables globales du tournoi
+                currentTournamentId = null;
+                currentTournamentData = null;
+                allTeams = [];
+                allBrassagePhases = [];
+                eliminationPhases = {};
+                currentSecondaryGroupsPreview = {};
+                eliminatedTeams = new Set();
+                currentDisplayedPhaseId = null;
+                allUserTournaments = [];
+                if (window.currentTournamentUnsubscribe) {
+                    window.currentTournamentUnsubscribe(); // Détacher le listener du tournoi
+                    window.currentTournamentUnsubscribe = null;
+                }
+                handleLocationHash(); // Rediriger vers la page d'authentification
+            } catch (error) {
+                console.error("Erreur de déconnexion:", error);
+                showToast("Erreur lors de la déconnexion.", "error");
+            }
+        });
+
+        // Gestionnaire pour le bouton "Changer de tournoi"
+        selectTournamentBtn.addEventListener('click', () => {
+            window.location.hash = '#tournaments';
+        });
     });
 
 })();
