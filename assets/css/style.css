@@ -1,0 +1,5 @@
+/* assets/css/style.css */
+/* Ajoutez ici vos styles CSS personnalisés pour toutes les pages */
+body {
+    @apply text-gray-800;
+}
