@@ -5,8 +5,8 @@ import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, 
 import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, deleteDoc, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 (function() {
-    // --- Constantes et Variables Globales ---
-    const APP_CONTAINER = document.getElementById('app-container');
+    // --- Constantes et Variables Globales (déclarées mais non initialisées ici pour les éléments DOM) ---
+    const APP_CONTAINER = document.getElementById('app-container'); // Cet élément est généralement disponible tôt
     const TEAM_DATA_KEY = 'volleyTeamsData';
     const BRASSAGE_PHASES_KEY = 'volleyBrassagePhases';
     const ELIMINATION_PHASES_KEY = 'volleyEliminationPhases';
@@ -33,31 +33,10 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     let currentTournamentData = null; // Données complètes du tournoi sélectionné
     let allUserTournaments = []; // Liste des tournois accessibles à l'utilisateur
 
-    // Map des liens de navigation pour un accès facile
-    const navLinks = {
-        home: document.getElementById('navHome'),
-        tournaments: document.getElementById('navTournaments'),
-        equipes: document.getElementById('navEquipes'),
-        brassages: document.getElementById('navBrassages'),
-        eliminatoires: document.getElementById('navEliminatoires'),
-        classements: document.getElementById('navClassements'),
-        // 'collaborators' est retiré car la page n'existe plus dans ce modèle simplifié
-    };
-
-    // Éléments de l'interface utilisateur (modal, toast)
-    const modal = document.getElementById('globalModal');
-    const modalTitle = document.getElementById('modalTitle');
-    const modalBody = document.getElementById('modalBody');
-    const modalConfirmBtn = document.getElementById('modalConfirmBtn');
-    const modalCancelBtn = document.getElementById('modalCancelBtn');
-    const toastContainer = document.getElementById('toastContainer');
-
-    // Éléments d'authentification et de sélection de tournoi dans la barre de navigation
-    const authInfoDiv = document.getElementById('authInfo');
-    const userEmailSpan = document.getElementById('userEmail');
-    const logoutBtn = document.getElementById('logoutBtn');
-    const selectTournamentBtn = document.getElementById('selectTournamentBtn');
-    const currentTournamentNameDisplay = document.getElementById('currentTournamentNameDisplay');
+    // Déclaration des variables pour les éléments DOM. Elles seront initialisées dans DOMContentLoaded.
+    let navLinks = {};
+    let modal, modalTitle, modalBody, modalConfirmBtn, modalCancelBtn, toastContainer;
+    let authInfoDiv, userEmailSpan, logoutBtn, selectTournamentBtn, currentTournamentNameDisplay;
 
 
     // --- Fonctions Utilitaires Générales ---
@@ -93,8 +72,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * @param {number} duration La durée d'affichage en ms (par défaut 3000).
      */
     function showToast(message, type = 'info', duration = 3000) {
+        // Vérifier si toastContainer est initialisé avant de l'utiliser
         if (!toastContainer) {
-            console.error("Toast container not found!");
+            console.error("Toast container not found! Cannot display toast: ", message);
             return;
         }
 
@@ -140,7 +120,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      */
     function showModal(title, content, confirmCallback, isDestructive = false) {
         if (!modal || !modalTitle || !modalBody || !modalConfirmBtn || !modalCancelBtn) {
-            console.error("Modal elements not found!");
+            console.error("Modal elements not found! Cannot display modal.");
             return;
         }
 
@@ -213,12 +193,16 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     // Initialize Firebase
     function initializeFirebaseAndAuth() {
         try {
+            // Log the raw values to help diagnose if they are empty
+            console.log("DEBUG: __firebase_config:", typeof __firebase_config !== 'undefined' ? __firebase_config : 'undefined');
+            console.log("DEBUG: __app_id:", typeof __app_id !== 'undefined' ? __app_id : 'undefined');
+
             const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
             if (Object.keys(firebaseConfig).length === 0) {
                 console.error("Firebase config is missing. Cannot initialize Firebase.");
-                showToast("Erreur: Configuration Firebase manquante.", "error");
+                showToast("Erreur: Configuration Firebase manquante. Veuillez contacter l'administrateur.", "error");
                 return;
             }
 
@@ -261,12 +245,15 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     handleLocationHash();
                 }
                 // Notify the main app that Firebase is ready and auth state is known
+                // This callback is now called by initializeFirebaseAndAuth itself
+                // (was previously in DOMContentLoaded, but better here after auth state is determined)
                 if (window.onFirebaseReady) {
                     window.onFirebaseReady();
                 }
             });
 
             // Attempt to sign in with custom token or anonymously if no user is present
+            // This part should only run if there's no current user authenticated yet
             if (!window.auth.currentUser) {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     window.signInWithCustomToken(window.auth, __initial_auth_token)
@@ -289,9 +276,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             showToast("Erreur critique: Échec de l'initialisation de Firebase.", "error");
         }
     }
-
-    // Call Firebase initialization when the script loads
-    initializeFirebaseAndAuth();
 
 
     // --- Fonctions de Gestion des Données (Firestore) ---
@@ -693,6 +677,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
         showModal(`Détails de la rencontre répétée`, modalContentDiv, () => hideModal());
     }
+
     // --- Fonctions de Gestion des Équipes ---
 
     /**
