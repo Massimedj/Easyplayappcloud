@@ -1014,7 +1014,7 @@
     window.importScoresFromExcel = importScoresFromExcel; // Sera définie plus tard
     window.exportScoresToExcel = exportScoresToExcel; // Sera définie plus tard
 
-})();
+
     // --- Fonctions de Gestion des Équipes ---
 
     /**
@@ -3717,3 +3717,4 @@
         // Pas d'écouteurs d'événements spécifiques nécessaires pour cette page simple d'affichage.
         // Si des fonctionnalités interactives sont ajoutées à l'avenir (ex: tri, filtres), les écouteurs iront ici.
     }
+})();
