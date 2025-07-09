@@ -1,8 +1,7 @@
-// Importe les modules Firebase nécessaires. Assurez-vous que votre balise <script> pour ce fichier
-// dans index.html est de type <script type="module" src="script.js"></script>
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, deleteDoc, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+// Les imports Firebase sont supprimés ici car ils sont maintenant gérés dans index.html
+// import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+// import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+// import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, deleteDoc, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 (function() {
     // --- Constantes Globales ---
@@ -77,7 +76,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         }
 
         const toast = document.createElement('div');
-        toast.className = `fixed bottom-4 right-4 p-4 rounded-lg shadow-lg text-white transform transition-all duration-300 ease-out z-50`;
+        // Utilisation de la position top-4 right-4 comme défini dans le nouveau HTML
+        toast.className = `p-4 rounded-lg shadow-lg text-white transform transition-all duration-300 ease-out z-50`;
 
         switch (type) {
             case 'success':
@@ -95,13 +95,13 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         toast.textContent = message;
         toastContainer.appendChild(toast);
 
+        // Apparition
         setTimeout(() => {
-            toast.style.transform = 'translateY(-10px)';
             toast.style.opacity = '1';
         }, 10);
 
+        // Disparition
         setTimeout(() => {
-            toast.style.transform = 'translateY(20px)';
             toast.style.opacity = '0';
             toast.addEventListener('transitionend', () => toast.remove());
         }, duration);
@@ -136,9 +136,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             confirmCallback();
             hideModal();
         };
-
+        // Assurez-vous que la modale est visible et avec la bonne transition
         modal.classList.remove('hidden');
-        setTimeout(() => modal.classList.add('opacity-100', 'scale-100'), 10);
+        setTimeout(() => modal.querySelector('.modal-content').classList.add('opacity-100', 'scale-100'), 10);
     }
 
     /**
@@ -149,130 +149,38 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             console.error("Élément de la modale non trouvé pour la cacher!");
             return;
         }
-        modal.classList.remove('opacity-100', 'scale-100');
-        modal.classList.add('opacity-0', 'scale-95');
+        modal.querySelector('.modal-content').classList.remove('opacity-100', 'scale-100');
+        modal.querySelector('.modal-content').classList.add('opacity-0', 'scale-95');
         setTimeout(() => modal.classList.add('hidden'), 300);
     }
 
 
     // --- Intégration Firebase (Authentification & Firestore) ---
-
-    // Rendre les fonctions Firebase accessibles globalement si nécessaire, sinon les utiliser directement
-    // depuis les imports dans les fonctions appelantes.
-    window.initializeApp = initializeApp;
-    window.getAuth = getAuth;
-    window.signInWithCustomToken = signInWithCustomToken;
-    window.signInAnonymously = signInAnonymously;
-    window.onAuthStateChanged = onAuthStateChanged;
-    window.signOut = signOut;
-    window.createUserWithEmailAndPassword = createUserWithEmailAndPassword;
-    window.signInWithEmailAndPassword = signInWithEmailAndPassword;
-
-    window.getFirestore = getFirestore;
-    window.doc = doc;
-    window.getDoc = getDoc;
-    window.setDoc = setDoc;
-    window.onSnapshot = onSnapshot;
-    window.collection = collection;
-    window.addDoc = addDoc;
-    window.deleteDoc = deleteDoc;
-    window.updateDoc = updateDoc;
-    window.query = query;
-    window.where = where;
-    window.getDocs = getDocs;
-    window.serverTimestamp = serverTimestamp;
+    // Les fonctions et objets Firebase sont maintenant exposés globalement par le script inline dans index.html.
+    // window.auth, window.db, window.userId, window.appId, etc. sont disponibles directement.
 
     // Firestore Unsubscribe functions
     window.currentTournamentUnsubscribe = null;
     window.allUserTournamentsUnsubscribe = null;
 
-    /**
-     * Initialise Firebase et configure l'écouteur d'état d'authentification.
-     * Cette fonction est appelée UNIQUEMENT après que le DOM soit chargé.
-     */
-    function initializeFirebaseAndAuth() {
-        try {
-            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-            if (Object.keys(firebaseConfig).length === 0) {
-                console.error("Firebase config is missing. Cannot initialize Firebase.");
-                showToast("Erreur: Configuration Firebase manquante. Veuillez contacter l'administrateur.", "error");
-                return;
-            }
-
-            window.firebaseApp = window.initializeApp(firebaseConfig);
-            window.auth = window.getAuth(window.firebaseApp);
-            window.db = window.getFirestore(window.firebaseApp);
-
-            window.onAuthStateChanged(window.auth, async (user) => {
-                if (user) {
-                    window.userId = user.uid;
-                    console.log("User is signed in:", user.uid);
-                    await loadAllUserTournaments();
-                    await loadAllData();
-                } else {
-                    window.userId = null;
-                    console.log("No user is signed in.");
-                    // Clear all local data when logged out
-                    currentTournamentId = null;
-                    currentTournamentData = null;
-                    allTeams = [];
-                    allBrassagePhases = [];
-                    eliminationPhases = {};
-                    currentSecondaryGroupsPreview = {};
-                    eliminatedTeams = new Set();
-                    currentDisplayedPhaseId = null;
-                    allUserTournaments = [];
-
-                    if (window.currentTournamentUnsubscribe) {
-                        window.currentTournamentUnsubscribe();
-                        window.currentTournamentUnsubscribe = null;
-                    }
-                    if (window.allUserTournamentsUnsubscribe) {
-                        window.allUserTournamentsUnsubscribe();
-                        window.allUserTournamentsUnsubscribe = null;
-                    }
-                    handleLocationHash(); // Redirect to auth page or home
-                }
-                if (window.onFirebaseReady) {
-                    window.onFirebaseReady();
-                }
-            });
-
-            if (!window.auth.currentUser) {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    window.signInWithCustomToken(window.auth, __initial_auth_token)
-                        .then(() => console.log("Signed in with custom token."))
-                        .catch(error => {
-                            console.error("Error signing in with custom token:", error);
-                            window.signInAnonymously(window.auth)
-                                .then(() => console.log("Signed in anonymously."))
-                                .catch(anonError => console.error("Error signing in anonymously:", anonError));
-                        });
-                } else {
-                    window.signInAnonymously(window.auth)
-                        .then(() => console.log("Signed in anonymously."))
-                        .catch(error => console.error("Error signing in anonymously:", error));
-                }
-            }
-
-        } catch (e) {
-            console.error("Failed to initialize Firebase:", e);
-            showToast("Erreur critique: Échec de l'initialisation de Firebase.", "error");
-        }
-    }
-
-
-    // --- Fonctions de Gestion des Données (Firestore) ---
+    // La fonction initializeFirebaseAndAuth est supprimée d'ici car elle est gérée dans index.html.
+    // Le onFirebaseReady sera appelé par le script inline de Firebase dans index.html.
 
     /**
      * Charge tous les tournois créés par l'utilisateur actuel.
      * Met en place un listener en temps réel.
      */
     async function loadAllUserTournaments() {
-        if (!window.db || !window.userId) {
-            console.warn("Firestore ou userId non disponible pour charger les tournois.");
+        // Vérifie si window.db et window.userId sont bien disponibles (mis à jour par l'initialisation Firebase dans index.html)
+        if (!window.db || !window.userId || !window.appId) {
+            console.warn("Firestore, userId ou appId non disponible pour charger les tournois.");
+            // Si l'utilisateur est déconnecté, s'assurer que les données des tournois sont effacées.
+            allUserTournaments = [];
+            if (window.location.hash === '#tournaments') {
+                renderTournamentDashboard(); // Re-render le tableau de bord des tournois qui sera vide
+            }
+            updateNavLinksVisibility();
+            updateTournamentDisplay();
             return;
         }
 
@@ -280,7 +188,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             window.allUserTournamentsUnsubscribe();
         }
 
-        const tournamentsRef = window.collection(window.db, `artifacts/${__app_id}/users/${window.userId}/tournaments`);
+        const tournamentsRef = window.collection(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`);
         const q = window.query(tournamentsRef);
 
         window.allUserTournamentsUnsubscribe = window.onSnapshot(q, (snapshot) => {
@@ -306,8 +214,19 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * Met en place un listener en temps réel.
      */
     async function loadAllData() {
-        if (!window.db || !window.userId) {
-            console.warn("Firestore ou userId non disponible pour charger les données.");
+        // Vérifie si window.db et window.userId sont bien disponibles (mis à jour par l'initialisation Firebase dans index.html)
+        if (!window.db || !window.userId || !window.appId) {
+            console.warn("Firestore, userId ou appId non disponible pour charger les données du tournoi.");
+            // Si l'utilisateur est déconnecté ou Firebase non initialisé, effacer les données locales.
+            currentTournamentId = null;
+            currentTournamentData = null;
+            allTeams = [];
+            allBrassagePhases = [];
+            eliminationPhases = {};
+            currentSecondaryGroupsPreview = {};
+            eliminatedTeams = new Set();
+            currentDisplayedPhaseId = null;
+            handleLocationHash(); // Redirige vers la page d'authentification ou des tournois
             return;
         }
 
@@ -326,7 +245,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             window.currentTournamentUnsubscribe();
         }
 
-        const tournamentDocRef = window.doc(window.db, `artifacts/${__app_id}/users/${window.userId}/tournaments`, currentTournamentId);
+        const tournamentDocRef = window.doc(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`, currentTournamentId);
 
         window.currentTournamentUnsubscribe = window.onSnapshot(tournamentDocRef, (docSnapshot) => {
             if (docSnapshot.exists()) {
@@ -364,12 +283,12 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * Sauvegarde toutes les données du tournoi actuellement sélectionné dans Firestore.
      */
     async function saveAllData() {
-        if (!window.db || !window.userId || !currentTournamentId) {
-            console.warn("Firestore, userId ou currentTournamentId non disponible pour la sauvegarde.");
+        if (!window.db || !window.userId || !currentTournamentId || !window.appId) {
+            console.warn("Firestore, userId, appId ou currentTournamentId non disponible pour la sauvegarde.");
             return;
         }
 
-        const tournamentDocRef = window.doc(window.db, `artifacts/${__app_id}/users/${window.userId}/tournaments`, currentTournamentId);
+        const tournamentDocRef = window.doc(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`, currentTournamentId);
 
         const dataToSave = {
             teams: allTeams,
@@ -377,12 +296,12 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             eliminationPhases: eliminationPhases,
             secondaryGroupsPreview: currentSecondaryGroupsPreview,
             eliminatedTeams: Array.from(eliminatedTeams),
-            currentDisplayedPhaseId: currentDisplayedPhaseId,
-            name: currentTournamentData.name,
-            date: currentTournamentData.date,
-            numTeamsAllowed: currentTournamentData.numTeamsAllowed,
-            ownerId: currentTournamentData.ownerId,
-            createdAt: currentTournamentData.createdAt,
+            // S'assurer que le nom, la date, et d'autres propriétés du tournoi sont conservées
+            name: currentTournamentData ? currentTournamentData.name : 'N/A',
+            date: currentTournamentData ? currentTournamentData.date : 'N/A',
+            numTeamsAllowed: currentTournamentData ? currentTournamentData.numTeamsAllowed : 0,
+            ownerId: window.userId, // L'ID du propriétaire est toujours l'utilisateur actuel
+            createdAt: currentTournamentData && currentTournamentData.createdAt ? currentTournamentData.createdAt : window.serverTimestamp(),
         };
 
         try {
@@ -405,11 +324,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             if (currentTournamentData) {
                 currentTournamentNameDisplay.textContent = `Tournoi Actif: ${escapeHtml(currentTournamentData.name)}`;
                 currentTournamentNameDisplay.classList.remove('hidden');
-                selectTournamentBtn.classList.remove('hidden');
+                // selectTournamentBtn est maintenant géré par updateNavLinksVisibility
             } else {
                 currentTournamentNameDisplay.textContent = '';
                 currentTournamentNameDisplay.classList.add('hidden');
-                selectTournamentBtn.classList.add('hidden');
+                // selectTournamentBtn est maintenant géré par updateNavLinksVisibility
             }
         }
     }
@@ -417,11 +336,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     /**
      * Crée un nouveau tournoi Firestore.
      * @param {string} name Nom du tournoi.
-     * @param {string} date Date du tournoi (format YYYY-MM-DD).
+     * @param {string} date Date du tournoi (formatYYYY-MM-DD).
      * @param {number} numTeams Nombre d'équipes prévues.
      */
     async function createNewTournament(name, date, numTeams) {
-        if (!window.db || !window.userId) {
+        if (!window.db || !window.userId || !window.appId) {
             showToast("Veuillez vous connecter pour créer un tournoi.", "error");
             return;
         }
@@ -431,7 +350,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         }
 
         try {
-            const tournamentsCollectionRef = window.collection(window.db, `artifacts/${__app_id}/users/${window.userId}/tournaments`);
+            const tournamentsCollectionRef = window.collection(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`);
             const newTournamentData = {
                 name: name.trim(),
                 date: date,
@@ -450,7 +369,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             currentTournamentId = docRef.id;
             localStorage.setItem(CURRENT_TOURNAMENT_ID_KEY, currentTournamentId);
             showToast(`Tournoi "${escapeHtml(name)}" créé et sélectionné !`, "success");
-            await loadAllData();
+            await loadAllData(); // Charger les données du nouveau tournoi
         } catch (error) {
             console.error("Erreur lors de la création du tournoi:", error);
             showToast("Erreur lors de la création du tournoi: " + error.message, "error");
@@ -462,7 +381,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * @param {string} tournamentId L'ID du tournoi à sélectionner.
      */
     async function selectTournament(tournamentId) {
-        if (!window.db || !window.userId) {
+        if (!window.db || !window.userId || !window.appId) {
             showToast("Veuillez vous connecter pour sélectionner un tournoi.", "error");
             return;
         }
@@ -482,7 +401,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * @param {string} tournamentId L'ID du tournoi à supprimer.
      */
     async function deleteTournament(tournamentId) {
-        if (!window.db || !window.userId) {
+        if (!window.db || !window.userId || !window.appId) {
             showToast("Veuillez vous connecter pour supprimer un tournoi.", "error");
             return;
         }
@@ -503,7 +422,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
         showModal('Confirmer la suppression du tournoi', messageContent, async () => {
             try {
-                const tournamentDocRef = window.doc(window.db, `artifacts/${__app_id}/users/${window.userId}/tournaments`, tournamentId);
+                const tournamentDocRef = window.doc(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`, tournamentId);
                 await window.deleteDoc(tournamentDocRef);
 
                 if (currentTournamentId === tournamentId) {
@@ -516,8 +435,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     }
                 }
                 showToast(`Tournoi "${escapeHtml(tournamentToDelete.name)}" supprimé.`, "success");
-                await loadAllUserTournaments();
-                handleLocationHash();
+                await loadAllUserTournaments(); // Recharger la liste des tournois
+                handleLocationHash(); // Rediriger l'utilisateur après la suppression
             } catch (error) {
                 console.error("Erreur lors de la suppression du tournoi:", error);
                 showToast("Erreur lors de la suppression du tournoi: " + error.message, "error");
@@ -659,6 +578,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     function renderEliminatoiresPage() { /* sera défini dans Partie 5 */ }
     function renderClassementsPage() { /* sera défini dans Partie 5 */ }
     function renderAuthPage() { /* sera défini dans Partie 5 */ }
+    function renderEliminationSelectionPage() { /* sera défini dans Partie 5 */ }
+
 
     const routes = {
         '#home': renderHomePage,
@@ -667,15 +588,16 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         '#brassages': renderBrassagesPage,
         '#eliminatoires': renderEliminatoiresPage,
         '#classements': renderClassementsPage,
-        '#auth': renderAuthPage
+        '#auth': renderAuthPage,
+        '#elimination-selection': renderEliminationSelectionPage
     };
 
     /**
      * Gère le changement de route en fonction du hash de l'URL.
      */
     function handleLocationHash() {
-        let path = window.location.hash || '#auth'; // Par défaut, la page d'authentification ou d'accueil
-        
+        let path = window.location.hash || '#home'; // Par défaut, la page d'accueil
+
         // Si l'utilisateur n'est pas connecté et qu'il n'est pas sur la page d'authentification,
         // le rediriger vers la page d'authentification.
         if (!window.userId && path !== '#auth') {
@@ -683,7 +605,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             window.location.hash = '#auth'; // Mettre à jour l'URL pour refléter la redirection
         } else if (window.userId && path === '#auth') {
             // Si l'utilisateur est connecté et qu'il est sur la page d'authentification,
-            // le rediriger vers la page des tournois ou l'accueil si aucun tournoi sélectionné
+            // le rediriger vers la page des tournois si aucun tournoi n'est sélectionné, sinon l'accueil
             if (!currentTournamentId) {
                  path = '#tournaments';
                  window.location.hash = '#tournaments';
@@ -692,7 +614,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                  window.location.hash = '#home';
             }
         }
-        
+
         const renderFunction = routes[path];
         if (renderFunction) {
             renderFunction();
@@ -707,57 +629,57 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * Met à jour la visibilité et la classe 'active' des liens de navigation.
      */
     function updateNavLinksVisibility() {
+        const currentPath = window.location.hash;
         // Mettre à jour la classe "active" de la navigation
-        document.querySelectorAll('.nav-link').forEach(link => {
-            if (link.getAttribute('href') === window.location.hash) {
-                link.classList.add('border-b-2', 'border-blue-200');
-            } else {
-                link.classList.remove('border-b-2', 'border-blue-200');
+        document.querySelectorAll('#main-nav-links .nav-link').forEach(link => {
+            if (link && link.getAttribute('href') === currentPath) {
+                link.classList.add('bg-blue-700'); // Ou une autre classe pour l'état actif
+            } else if (link) {
+                link.classList.remove('bg-blue-700');
             }
         });
+        // Gérer spécifiquement le lien 'Accueil' qui est directement sous 'nav'
+        if (navLinks.home) { // navLinks.home est maintenant le <a> du lien Accueil
+            if (navLinks.home.getAttribute('href') === currentPath) {
+                navLinks.home.classList.add('bg-blue-700');
+            } else {
+                navLinks.home.classList.remove('bg-blue-700');
+            }
+        }
 
-        // Gérer la visibilité des liens de navigation
-        if (window.userId && currentTournamentId) {
-            // Utilisateur connecté et tournoi sélectionné : tout visible sauf auth
-            navLinks.home.classList.remove('hidden');
-            navLinks.equipes.classList.remove('hidden');
-            navLinks.brassages.classList.remove('hidden');
-            navLinks.eliminatoires.classList.remove('hidden');
-            navLinks.classements.classList.remove('hidden');
-            authInfoDiv.classList.remove('hidden'); // Contient email et bouton logout
-            userEmailSpan.textContent = window.auth.currentUser ? window.auth.currentUser.email || "Anonyme" : "Déconnecté";
-            logoutBtn.classList.remove('hidden');
-            selectTournamentBtn.classList.remove('hidden');
-            currentTournamentNameDisplay.classList.remove('hidden');
-        } else if (window.userId && !currentTournamentId) {
-            // Utilisateur connecté, mais aucun tournoi sélectionné : seulement tournois et auth visible
-            navLinks.home.classList.add('hidden');
-            navLinks.equipes.classList.add('hidden');
-            navLinks.brassages.classList.add('hidden');
-            navLinks.eliminatoires.classList.add('hidden');
-            navLinks.classements.classList.add('hidden');
-            authInfoDiv.classList.remove('hidden');
-            userEmailSpan.textContent = window.auth.currentUser ? window.auth.currentUser.email || "Anonyme" : "Déconnecté";
-            logoutBtn.classList.remove('hidden');
-            selectTournamentBtn.classList.remove('hidden'); // Toujours visible pour sélectionner un tournoi
-            currentTournamentNameDisplay.classList.add('hidden'); // Masquer le nom du tournoi si aucun sélectionné
-        } else {
-            // Non connecté : seulement tournois (pour s'inscrire/se connecter) et accueil, le reste masqué
-            navLinks.home.classList.remove('hidden');
-            navLinks.equipes.classList.add('hidden');
-            navLinks.brassages.classList.add('hidden');
-            navLinks.eliminatoires.classList.add('hidden');
-            navLinks.classements.classList.add('hidden');
-            authInfoDiv.classList.remove('hidden'); // Auth div visible pour login/register
+
+        // Gérer la visibilité des blocs d'informations et des liens de navigation
+        const isLoggedIn = !!window.userId;
+        const tournamentSelected = !!currentTournamentId;
+
+        if (authInfoDiv) {
+            authInfoDiv.classList.toggle('hidden', !isLoggedIn);
+        }
+        if (userEmailSpan && window.auth && window.auth.currentUser) {
+            userEmailSpan.textContent = window.auth.currentUser.email || "Anonyme";
+        } else if (userEmailSpan) {
             userEmailSpan.textContent = "Déconnecté";
-            logoutBtn.classList.add('hidden');
-            selectTournamentBtn.classList.add('hidden');
-            currentTournamentNameDisplay.classList.add('hidden');
         }
-        // Le lien "Tournois" (navTournaments) est toujours visible pour les utilisateurs connectés
-        if (navLinks.tournaments) {
-            navLinks.tournaments.classList.remove('hidden');
+
+        if (logoutBtn) {
+            logoutBtn.classList.toggle('hidden', !isLoggedIn);
         }
+        if (selectTournamentBtn) {
+            selectTournamentBtn.classList.toggle('hidden', !isLoggedIn); // Toujours visible si connecté
+        }
+        if (currentTournamentNameDisplay) {
+            currentTournamentNameDisplay.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        }
+
+        // Afficher/masquer les liens de navigation principaux basés sur la connexion et la sélection du tournoi
+        // Note: navLinks.home est le <a> du lien Accueil qui est directement sous nav dans le nouveau HTML.
+        // Les autres sont des <li> qui contiennent les <a>.
+        if (navLinks.home) navLinks.home.parentElement.classList.toggle('hidden', !isLoggedIn && currentPath !== '#auth'); // La li du lien Accueil
+        if (navLinks.tournaments) navLinks.tournaments.classList.toggle('hidden', !isLoggedIn); // La li du lien Tournois
+        if (navLinks.equipes) navLinks.equipes.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        if (navLinks.brassages) navLinks.brassages.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        if (navLinks.eliminatoires) navLinks.eliminatoires.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        if (navLinks.classements) navLinks.classements.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
     }
 
 
@@ -765,26 +687,27 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     // Tout le code qui interagit avec le DOM doit être à l'intérieur de DOMContentLoaded
     document.addEventListener('DOMContentLoaded', () => {
         // 1. Initialisation des variables DOM ici, après que le document soit prêt
-        modal = document.getElementById('globalModal');
+        modal = document.getElementById('actionModal'); // CHANGEMENT D'ID: était globalModal
         modalTitle = document.getElementById('modalTitle');
         modalBody = document.getElementById('modalBody');
         modalConfirmBtn = document.getElementById('modalConfirmBtn');
         modalCancelBtn = document.getElementById('modalCancelBtn');
-        toastContainer = document.getElementById('toastContainer');
+        toastContainer = document.getElementById('toast-container'); // CHANGEMENT D'ID: était toastContainer
 
-        authInfoDiv = document.getElementById('authInfo');
-        userEmailSpan = document.getElementById('userEmail');
-        logoutBtn = document.getElementById('logoutBtn');
-        selectTournamentBtn = document.getElementById('selectTournamentBtn');
-        currentTournamentNameDisplay = document.getElementById('currentTournamentNameDisplay');
+        authInfoDiv = document.getElementById('auth-info'); // CHANGEMENT D'ID: était authInfo
+        userEmailSpan = document.getElementById('user-email'); // CHANGEMENT D'ID: était userEmail
+        logoutBtn = document.getElementById('logout-btn'); // CHANGEMENT D'ID: était logoutBtn
+        selectTournamentBtn = document.getElementById('select-tournament-btn'); // CHANGEMENT D'ID: était selectTournamentBtn
+        currentTournamentNameDisplay = document.getElementById('current-tournament-name'); // CHANGEMENT D'ID: était currentTournamentNameDisplay
 
+        // navLinks maintenant cible les LI (pour les cacher/afficher) sauf pour 'home' qui cible le <a>
         navLinks = {
-            home: document.getElementById('navHome'),
-            tournaments: document.getElementById('navTournaments'),
-            equipes: document.getElementById('navEquipes'),
-            brassages: document.getElementById('navBrassages'),
-            eliminatoires: document.getElementById('navEliminatoires'),
-            classements: document.getElementById('navClassements'),
+            home: document.getElementById('nav-home'), // NOUVEL ID POUR LIEN ACCUEIL
+            tournaments: document.getElementById('main-nav-links').querySelector('a[href="#tournaments"]').parentElement, // Tournois n'a pas d'ID de LI
+            equipes: document.getElementById('nav-equipes'), // Cible la LI
+            brassages: document.getElementById('nav-brassages'), // Cible la LI
+            eliminatoires: document.getElementById('nav-eliminatoires'), // Cible la LI
+            classements: document.getElementById('nav-classements'), // Cible la LI
         };
 
         // 2. Attacher les gestionnaires d'événements pour les boutons de la modale globale
@@ -794,48 +717,44 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             console.error("modalCancelBtn non trouvé après DOMContentLoaded. Vérifiez l'HTML.");
         }
 
-        // 3. Ajout de la transparence à la barre de navigation lors du défilement
-        const navBar = document.querySelector('nav');
-        if (navBar) {
-            let isScrolled = false;
-            window.addEventListener('scroll', () => {
-                if (window.scrollY > 0) {
-                    if (!isScrolled) {
-                        navBar.classList.add('bg-blue-700/70', 'transition-colors', 'duration-300');
-                        navBar.classList.remove('bg-blue-700/90');
-                        isScrolled = true;
-                    }
-                } else {
-                    if (isScrolled) {
-                        navBar.classList.remove('bg-blue-700/70');
-                        navBar.classList.add('bg-blue-700/90');
-                        isScrolled = false;
-                    }
-                }
-            });
-        } else {
-            console.warn("Barre de navigation (nav) non trouvée.");
-        }
+        // 3. Pas de gestion de scroll pour la barre de navigation verticale fixe
+        // La barre nav est fixe et ne change pas d'apparence au scroll.
+        // const navBar = document.querySelector('nav');
+        // if (navBar) { /*... code de gestion du scroll ...*/ }
 
-        // 4. Initialiser Firebase et l'authentification APRÈS que le DOM soit prêt
-        initializeFirebaseAndAuth();
-
-        // 5. Fonction de rappel appelée par initializeFirebaseAndAuth une fois Firebase initialisé et l'état d'authentification connu
-        window.onFirebaseReady = () => {
+        // 4. Firebase est initialisé dans le script inline de index.html.
+        // On attend que window.onFirebaseReady soit appelé par ce script.
+        window.onFirebaseReady = async (user) => {
             console.log("Firebase est prêt. Gestion du routage et chargement initial des données.");
+            // Si l'utilisateur est connecté, tenter de charger les tournois et les données du tournoi.
+            if (user) {
+                await loadAllUserTournaments();
+                await loadAllData();
+            } else {
+                // Si déconnecté, s'assurer que l'état de l'application est propre
+                currentTournamentId = null;
+                currentTournamentData = null;
+                allTeams = [];
+                allBrassagePhases = [];
+                eliminationPhases = {};
+                currentSecondaryGroupsPreview = {};
+                eliminatedTeams = new Set();
+                currentDisplayedPhaseId = null;
+                allUserTournaments = [];
+            }
             handleLocationHash(); // Gère la route initiale et la visibilité des liens
         };
 
-        // 6. Écouter les changements de hash dans l'URL pour le routage
+        // 5. Écouter les changements de hash dans l'URL pour le routage
         window.addEventListener('hashchange', handleLocationHash);
 
-        // 7. Gestionnaire pour le bouton de déconnexion
+        // 6. Gestionnaire pour le bouton de déconnexion
         if (logoutBtn) {
             logoutBtn.addEventListener('click', async () => {
                 try {
                     await window.signOut(window.auth);
                     showToast("Déconnexion réussie !", "info");
-                    // Les variables globales et les listeners sont nettoyés dans le onAuthStateChanged
+                    // Les variables globales et les listeners sont nettoyés par le onAuthStateChanged
                 } catch (error) {
                     console.error("Erreur de déconnexion:", error);
                     showToast("Erreur lors de la déconnexion.", "error");
@@ -843,7 +762,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             });
         }
 
-        // 8. Gestionnaire pour le bouton "Changer de tournoi"
+        // 7. Gestionnaire pour le bouton "Changer de tournoi"
         if (selectTournamentBtn) {
             selectTournamentBtn.addEventListener('click', () => {
                 window.location.hash = '#tournaments';
@@ -851,33 +770,40 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         }
     });
 
-    // Rendre les fonctions globales nécessaires pour être appelées depuis d'autres parties du code ou directement par le HTML
-    window.showToast = showToast;
-    window.showModal = showModal;
-    window.hideModal = hideModal;
-    window.currentTournamentId = currentTournamentId; // Exposer pour l'accès aux autres parties
-    window.allTeams = allTeams; // Exposer pour l'accès aux autres parties
-    window.allBrassagePhases = allBrassagePhases; // Exposer
-    window.eliminationPhases = eliminationPhases; // Exposer
-    window.currentSecondaryGroupsPreview = currentSecondaryGroupsPreview; // Exposer
-    window.eliminatedTeams = eliminatedTeams; // Exposer
-    window.currentDisplayedPhaseId = currentDisplayedPhaseId; // Exposer
-    window.currentTournamentData = currentTournamentData; // Exposer
-    window.allUserTournaments = allUserTournaments; // Exposer
+     // Exposer les fonctions de rendu et de logique des pages (Partie 5 et autres)
+    window.renderHomePage = renderHomePage;
+    window.setupAuthPageLogic = setupAuthPageLogic;
+    window.renderEquipesPage = renderEquipesPage;
+    window.setupEquipesPageLogic = setupEquipesPageLogic;
+    window.renderBrassagesPage = renderBrassagesPage;
+    window.setupBrassagesPageLogic = setupBrassagesPageLogic;
+    window.renderSecondaryGroupsPreview = renderSecondaryGroupsPreview;
+    window.renderEliminationSelectionPage = renderEliminationSelectionPage;
+    window.setupEliminationSelectionPageLogic = setupEliminationSelectionPageLogic;
+    window.renderEliminatoiresPage = renderEliminatoiresPage;
+    window.setupEliminatoiresPageLogic = setupEliminatoiresPageLogic;
+    window.renderClassementsPage = renderClassementsPage;
+    window.setupClassementsPageLogic = setupClassementsPageLogic;
+    window.renderTournamentDashboard = renderTournamentDashboard;
+    window.setupTournamentDashboardLogic = setupTournamentDashboardLogic;
 
-    window.saveAllData = saveAllData;
-    window.loadAllData = loadAllData; // Peut être appelé si on veut recharger manuellement
-    window.createNewTournament = createNewTournament;
-    window.selectTournament = selectTournament;
-    window.deleteTournament = deleteTournament;
-    window.teamExists = teamExists;
-    window.isMatchRepeated = isMatchRepeated;
-    window.updateRepeatedMatchesCountDisplay = updateRepeatedMatchesCountDisplay;
-    window.showRepeatedMatchDetailsModal = showRepeatedMatchDetailsModal;
-    window.updateNavLinksVisibility = updateNavLinksVisibility;
-    window.updateTournamentDisplay = updateTournamentDisplay;
-    window.handleLocationHash = handleLocationHash; // Exposer pour pouvoir déclencher un routage
-
+    // Exposer les fonctions de gestion des équipes et phases de brassage
+    window.addTeam = addTeam;
+    window.updateTeam = updateTeam;
+    window.deleteTeam = deleteTeam;
+    window.isBrassagePhaseComplete = isBrassagePhaseComplete;
+    window.generateAndEvaluatePools = generateAndEvaluatePools;
+    window.generatePoolsForPhase = generatePoolsForPhase;
+    window._generatePoolsLogicInitialLevels = _generatePoolsLogicInitialLevels;
+    window._generatePoolsLogicRankingBased = _generatePoolsLogicRankingBased;
+    window._performSecondaryGroupsPreview = _performSecondaryGroupsPreview;
+    window.showTeamOptionsModal = showTeamOptionsModal;
+    window.showMoveTeamModal = showMoveTeamModal;
+    window.moveTeamBetweenSecondaryGroups = moveTeamBetweenSecondaryGroups;
+    window.validateSecondaryGroupsForElimination = validateSecondaryGroupsForElimination;
+    window.validateForDirectElimination = validateForDirectElimination;
+    window.generateSecondaryBrassagePhases = generateSecondaryBrassagePhases;
+    window.clearAllPhases = clearAllPhases;
 })();
     // --- Fonctions de Gestion des Équipes ---
 
