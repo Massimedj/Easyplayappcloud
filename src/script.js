@@ -1,3 +1,9 @@
+// Importe les modules Firebase nécessaires. Assurez-vous que votre balise <script> pour ce fichier
+// dans index.html est de type <script type="module" src="script.js"></script>
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, deleteDoc, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
 (function() {
     // --- Constantes et Variables Globales ---
     const APP_CONTAINER = document.getElementById('app-container');
@@ -176,33 +182,29 @@
     // --- Intégration Firebase (Authentification & Firestore) ---
 
     // Variables globales pour Firebase (rendues accessibles via window pour le scope)
-    window.firebaseApp = null;
-    window.auth = null;
-    window.db = null;
+    // Elles sont maintenant assignées directement depuis les imports
+    window.initializeApp = initializeApp;
+    window.getAuth = getAuth;
+    window.signInWithCustomToken = signInWithCustomToken;
+    window.signInAnonymously = signInAnonymously;
+    window.onAuthStateChanged = onAuthStateChanged;
+    window.signOut = signOut;
+    window.createUserWithEmailAndPassword = createUserWithEmailAndPassword;
+    window.signInWithEmailAndPassword = signInWithEmailAndPassword;
 
-    // Firebase SDK functions (made global for easier access in IIFE)
-    window.initializeApp = firebase.initializeApp;
-    window.getAuth = firebase.auth.getAuth;
-    window.signInWithCustomToken = firebase.auth.signInWithCustomToken;
-    window.signInAnonymously = firebase.auth.signInAnonymously;
-    window.onAuthStateChanged = firebase.auth.onAuthStateChanged;
-    window.signOut = firebase.auth.signOut;
-    window.createUserWithEmailAndPassword = firebase.auth.createUserWithEmailAndPassword;
-    window.signInWithEmailAndPassword = firebase.auth.signInWithEmailAndPassword;
-
-    window.getFirestore = firebase.firestore.getFirestore;
-    window.doc = firebase.firestore.doc;
-    window.getDoc = firebase.firestore.getDoc;
-    window.setDoc = firebase.firestore.setDoc;
-    window.onSnapshot = firebase.firestore.onSnapshot;
-    window.collection = firebase.firestore.collection;
-    window.addDoc = firebase.firestore.addDoc;
-    window.deleteDoc = firebase.firestore.deleteDoc;
-    window.updateDoc = firebase.firestore.updateDoc;
-    window.query = firebase.firestore.query;
-    window.where = firebase.firestore.where;
-    window.getDocs = firebase.firestore.getDocs;
-
+    window.getFirestore = getFirestore;
+    window.doc = doc;
+    window.getDoc = getDoc;
+    window.setDoc = setDoc;
+    window.onSnapshot = onSnapshot;
+    window.collection = collection;
+    window.addDoc = addDoc;
+    window.deleteDoc = deleteDoc;
+    window.updateDoc = updateDoc;
+    window.query = query;
+    window.where = where;
+    window.getDocs = getDocs;
+    window.serverTimestamp = serverTimestamp; // Assurez-vous que serverTimestamp est également importé
 
     // Firestore Unsubscribe functions
     window.currentTournamentUnsubscribe = null;
@@ -418,7 +420,6 @@
             numTeamsAllowed: currentTournamentData.numTeamsAllowed,
             ownerId: currentTournamentData.ownerId,
             createdAt: currentTournamentData.createdAt,
-            // ownerEmail: currentTournamentData.ownerEmail // Plus nécessaire dans ce modèle simplifié
         };
 
         try {
