@@ -5,33 +5,32 @@ import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, 
 import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, deleteDoc, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 (function() {
-    // --- Constantes et Variables Globales ---
-    const APP_CONTAINER = document.getElementById('app-container'); // Cet élément est généralement disponible tôt
+    // --- Constantes Globales ---
+    const APP_CONTAINER = document.getElementById('app-container');
     const TEAM_DATA_KEY = 'volleyTeamsData';
     const BRASSAGE_PHASES_KEY = 'volleyBrassagePhases';
     const ELIMINATION_PHASES_KEY = 'volleyEliminationPhases';
     const SECONDARY_GROUPS_SELECTION_KEY = 'volleySecondaryGroupsSelection';
-    const POOL_GENERATION_BASIS_KEY = 'volleyPoolGenerationBasis'; // New key for pool generation basis
-    const SECONDARY_GROUPS_PREVIEW_KEY = 'volleySecondaryGroupsPreview'; // New key for persisting secondary group preview
-    const ELIMINATED_TEAMS_KEY = 'volleyEliminatedTeams'; // NOUVEAU: Clé pour les équipes éliminées
-    const CURRENT_TOURNAMENT_ID_KEY = 'currentTournamentId'; // Clé pour l'ID du tournoi sélectionné
+    const POOL_GENERATION_BASIS_KEY = 'volleyPoolGenerationBasis';
+    const SECONDARY_GROUPS_PREVIEW_KEY = 'volleySecondaryGroupsPreview';
+    const ELIMINATED_TEAMS_KEY = 'volleyEliminatedTeams';
+    const CURRENT_TOURNAMENT_ID_KEY = 'currentTournamentId';
 
     const PHASE_TYPE_INITIAL = 'initial_brassage';
     const PHASE_TYPE_SECONDARY_BRASSAGE = 'secondary_brassage';
-    const PHASE_TYPE_ELIMINATION_SEEDING = 'elimination_seeding'; // Phase spéciale pour le regroupement éliminatoire
+    const PHASE_TYPE_ELIMINATION_SEEDING = 'elimination_seeding';
 
+    // --- Variables Globales (état de l'application) ---
     let allTeams = [];
-    let allBrassagePhases = []; // Contient toutes les phases de brassage (initiales, secondaires, et seeding éliminatoire)
-    let eliminationPhases = {}; // Contient les structures d'arbres éliminatoires par groupe (Principale, Consolante, etc.)
-    let currentSecondaryGroupsPreview = {}; // Pour la prévisualisation des groupes secondaires, maintenant persistant
-    let eliminatedTeams = new Set(); // NOUVEAU: Set pour stocker les IDs des équipes éliminées
+    let allBrassagePhases = [];
+    let eliminationPhases = {};
+    let currentSecondaryGroupsPreview = {};
+    let eliminatedTeams = new Set();
+    let currentDisplayedPhaseId = null;
 
-    let currentDisplayedPhaseId = null; // ID de la phase de brassage actuellement affichée
-
-    // Variables pour la gestion des tournois et de l'authentification
-    let currentTournamentId = null; // ID du tournoi actuellement sélectionné
-    let currentTournamentData = null; // Données complètes du tournoi sélectionné
-    let allUserTournaments = []; // Liste des tournois accessibles à l'utilisateur
+    let currentTournamentId = null;
+    let currentTournamentData = null;
+    let allUserTournaments = [];
 
     // Déclaration des variables pour les éléments DOM. Elles seront initialisées DANS DOMContentLoaded.
     let navLinks = {};
@@ -72,8 +71,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * @param {number} duration La durée d'affichage en ms (par défaut 3000).
      */
     function showToast(message, type = 'info', duration = 3000) {
-        // Vérifier si toastContainer est initialisé avant de l'utiliser
-        // Si non, cela signifie que le DOM n'est pas encore prêt, on log l'erreur.
         if (!toastContainer) {
             console.error("Toast container non trouvé! Impossible d'afficher le toast: ", message);
             return;
@@ -98,13 +95,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         toast.textContent = message;
         toastContainer.appendChild(toast);
 
-        // Animate in
         setTimeout(() => {
             toast.style.transform = 'translateY(-10px)';
             toast.style.opacity = '1';
-        }, 10); // Small delay to ensure transition applies
+        }, 10);
 
-        // Animate out and remove
         setTimeout(() => {
             toast.style.transform = 'translateY(20px)';
             toast.style.opacity = '0';
@@ -120,14 +115,13 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * @param {boolean} isDestructive Si true, le bouton de confirmation est rouge.
      */
     function showModal(title, content, confirmCallback, isDestructive = false) {
-        // Vérifier si les éléments de la modale sont initialisés
         if (!modal || !modalTitle || !modalBody || !modalConfirmBtn || !modalCancelBtn) {
             console.error("Éléments de la modale non trouvés! Impossible d'afficher la modale.");
             return;
         }
 
         modalTitle.textContent = title;
-        modalBody.innerHTML = ''; // Clear previous content
+        modalBody.innerHTML = '';
         modalBody.appendChild(content);
 
         modalConfirmBtn.className = `inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 text-base font-medium text-white hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 sm:ml-3 sm:w-auto sm:text-sm transition ease-in-out duration-150`;
@@ -144,7 +138,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         };
 
         modal.classList.remove('hidden');
-        setTimeout(() => modal.classList.add('opacity-100', 'scale-100'), 10); // Animate in
+        setTimeout(() => modal.classList.add('opacity-100', 'scale-100'), 10);
     }
 
     /**
@@ -156,15 +150,15 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             return;
         }
         modal.classList.remove('opacity-100', 'scale-100');
-        modal.classList.add('opacity-0', 'scale-95'); // Animate out
-        setTimeout(() => modal.classList.add('hidden'), 300); // Hide after transition
+        modal.classList.add('opacity-0', 'scale-95');
+        setTimeout(() => modal.classList.add('hidden'), 300);
     }
 
 
     // --- Intégration Firebase (Authentification & Firestore) ---
 
-    // Variables globales pour Firebase (rendues accessibles via window pour le scope)
-    // Elles sont maintenant assignées directement depuis les imports
+    // Rendre les fonctions Firebase accessibles globalement si nécessaire, sinon les utiliser directement
+    // depuis les imports dans les fonctions appelantes.
     window.initializeApp = initializeApp;
     window.getAuth = getAuth;
     window.signInWithCustomToken = signInWithCustomToken;
@@ -186,7 +180,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     window.query = query;
     window.where = where;
     window.getDocs = getDocs;
-    window.serverTimestamp = serverTimestamp; // Assurez-vous que serverTimestamp est également importé
+    window.serverTimestamp = serverTimestamp;
 
     // Firestore Unsubscribe functions
     window.currentTournamentUnsubscribe = null;
@@ -211,14 +205,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             window.auth = window.getAuth(window.firebaseApp);
             window.db = window.getFirestore(window.firebaseApp);
 
-            // Listen for auth state changes
             window.onAuthStateChanged(window.auth, async (user) => {
                 if (user) {
                     window.userId = user.uid;
                     console.log("User is signed in:", user.uid);
-                    // Load all tournaments accessible to this user
                     await loadAllUserTournaments();
-                    // Load data for the previously selected tournament or redirect
                     await loadAllData();
                 } else {
                     window.userId = null;
@@ -242,17 +233,13 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                         window.allUserTournamentsUnsubscribe();
                         window.allUserTournamentsUnsubscribe = null;
                     }
-                    // Redirect to auth page if no user
-                    handleLocationHash();
+                    handleLocationHash(); // Redirect to auth page or home
                 }
-                // Notify the main app that Firebase is ready and auth state is known
                 if (window.onFirebaseReady) {
                     window.onFirebaseReady();
                 }
             });
 
-            // Attempt to sign in with custom token or anonymously if no user is present
-            // This part should only run if there's no current user authenticated yet
             if (!window.auth.currentUser) {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     window.signInWithCustomToken(window.auth, __initial_auth_token)
@@ -289,7 +276,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             return;
         }
 
-        // Détacher l'ancien listener si existant
         if (window.allUserTournamentsUnsubscribe) {
             window.allUserTournamentsUnsubscribe();
         }
@@ -304,12 +290,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             });
             allUserTournaments = fetchedTournaments;
             console.log("All user tournaments updated:", allUserTournaments);
-            // Re-render the tournament dashboard if it's the current page
             if (window.location.hash === '#tournaments') {
                 renderTournamentDashboard();
             }
-            updateNavLinksVisibility(); // Update visibility based on tournament selection
-            updateTournamentDisplay(); // Update current tournament name display
+            updateNavLinksVisibility();
+            updateTournamentDisplay();
         }, (error) => {
             console.error("Error fetching user tournaments:", error);
             showToast("Erreur lors du chargement de vos tournois.", "error");
@@ -326,7 +311,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             return;
         }
 
-        // Tenter de récupérer l'ID du tournoi précédemment sélectionné
         const storedTournamentId = localStorage.getItem(CURRENT_TOURNAMENT_ID_KEY);
         if (storedTournamentId) {
             currentTournamentId = storedTournamentId;
@@ -334,11 +318,10 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
         if (!currentTournamentId) {
             console.log("Aucun tournoi sélectionné. Redirection vers le tableau de bord des tournois.");
-            handleLocationHash(); // Rediriger vers le tableau de bord des tournois
+            handleLocationHash();
             return;
         }
 
-        // Détacher l'ancien listener si existant
         if (window.currentTournamentUnsubscribe) {
             window.currentTournamentUnsubscribe();
         }
@@ -350,7 +333,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 currentTournamentData = { id: docSnapshot.id, ...docSnapshot.data() };
                 console.log("Current tournament data loaded/updated:", currentTournamentData);
 
-                // Mettre à jour les variables globales avec les données du tournoi
                 allTeams = currentTournamentData.teams || [];
                 allBrassagePhases = currentTournamentData.brassagePhases || [];
                 eliminationPhases = currentTournamentData.eliminationPhases || {};
@@ -358,24 +340,23 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 eliminatedTeams = new Set(currentTournamentData.eliminatedTeams || []);
                 currentDisplayedPhaseId = currentTournamentData.currentDisplayedPhaseId || null;
 
-                // Re-render the current page to reflect updated data
-                handleLocationHash(); // This will re-render the appropriate page
+                handleLocationHash();
                 showToast(`Données du tournoi "${escapeHtml(currentTournamentData.name)}" chargées.`, "info");
             } else {
                 console.warn("Le tournoi sélectionné n'existe plus ou n'est pas accessible.");
                 showToast("Le tournoi sélectionné n'existe plus ou n'est pas accessible. Veuillez en choisir un autre.", "error");
-                currentTournamentId = null; // Clear invalid ID
+                currentTournamentId = null;
                 currentTournamentData = null;
                 localStorage.removeItem(CURRENT_TOURNAMENT_ID_KEY);
-                handleLocationHash(); // Redirect to tournament dashboard
+                handleLocationHash();
             }
         }, (error) => {
             console.error("Error fetching current tournament data:", error);
             showToast("Erreur lors du chargement des données du tournoi actuel.", "error");
-            currentTournamentId = null; // Clear invalid ID on error
+            currentTournamentId = null;
             currentTournamentData = null;
             localStorage.removeItem(CURRENT_TOURNAMENT_ID_KEY);
-            handleLocationHash(); // Redirect to tournament dashboard
+            handleLocationHash();
         });
     }
 
@@ -395,9 +376,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             brassagePhases: allBrassagePhases,
             eliminationPhases: eliminationPhases,
             secondaryGroupsPreview: currentSecondaryGroupsPreview,
-            eliminatedTeams: Array.from(eliminatedTeams), // Convert Set to Array for Firestore
+            eliminatedTeams: Array.from(eliminatedTeams),
             currentDisplayedPhaseId: currentDisplayedPhaseId,
-            // Conserver les métadonnées du tournoi
             name: currentTournamentData.name,
             date: currentTournamentData.date,
             numTeamsAllowed: currentTournamentData.numTeamsAllowed,
@@ -408,7 +388,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         try {
             await window.setDoc(tournamentDocRef, dataToSave, { merge: true });
             console.log("Données du tournoi sauvegardées avec succès !");
-            // showToast("Données sauvegardées !", "success", 1500); // Too many toasts, remove for now
         } catch (error) {
             console.error("Erreur lors de la sauvegarde des données du tournoi:", error);
             showToast("Erreur lors de la sauvegarde des données.", "error");
@@ -458,7 +437,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 date: date,
                 numTeamsAllowed: numTeams,
                 ownerId: window.userId,
-                createdAt: window.serverTimestamp(), // Utilisez le timestamp du serveur
+                createdAt: window.serverTimestamp(),
                 teams: [],
                 brassagePhases: [],
                 eliminationPhases: {},
@@ -471,7 +450,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             currentTournamentId = docRef.id;
             localStorage.setItem(CURRENT_TOURNAMENT_ID_KEY, currentTournamentId);
             showToast(`Tournoi "${escapeHtml(name)}" créé et sélectionné !`, "success");
-            await loadAllData(); // Charger les données du nouveau tournoi et rediriger
+            await loadAllData();
         } catch (error) {
             console.error("Erreur lors de la création du tournoi:", error);
             showToast("Erreur lors de la création du tournoi: " + error.message, "error");
@@ -495,7 +474,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         currentTournamentId = tournamentId;
         localStorage.setItem(CURRENT_TOURNAMENT_ID_KEY, tournamentId);
         showToast("Chargement du tournoi...", "info");
-        await loadAllData(); // Charger les données du tournoi sélectionné
+        await loadAllData();
     }
 
     /**
@@ -531,15 +510,14 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     currentTournamentId = null;
                     currentTournamentData = null;
                     localStorage.removeItem(CURRENT_TOURNAMENT_ID_KEY);
-                    // Détacher le listener si le tournoi actif est supprimé
                     if (window.currentTournamentUnsubscribe) {
                         window.currentTournamentUnsubscribe();
                         window.currentTournamentUnsubscribe = null;
                     }
                 }
                 showToast(`Tournoi "${escapeHtml(tournamentToDelete.name)}" supprimé.`, "success");
-                await loadAllUserTournaments(); // Recharger la liste des tournois pour l'affichage
-                handleLocationHash(); // Rediriger vers le tableau de bord ou l'accueil
+                await loadAllUserTournaments();
+                handleLocationHash();
             } catch (error) {
                 console.error("Erreur lors de la suppression du tournoi:", error);
                 showToast("Erreur lors de la suppression du tournoi: " + error.message, "error");
@@ -570,8 +548,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         const sortedIds = [team1Id, team2Id].sort();
         const matchKey = JSON.stringify(sortedIds);
 
-        // Filtrer les phases pour n'inclure que les phases de brassage terminées (générées)
-        // et exclure la phase actuellement générée/affichée
         const relevantPhases = allBrassagePhases.filter(phase =>
             phase.generated && phase.id !== currentPhaseId &&
             (phase.type === PHASE_TYPE_INITIAL || phase.type === PHASE_TYPE_SECONDARY_BRASSAGE)
@@ -585,7 +561,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                             const currentMatchSortedIds = [match.team1Id, match.team2Id].sort();
                             const currentMatchKey = JSON.stringify(currentMatchSortedIds);
                             if (currentMatchKey === matchKey) {
-                                return true; // Match répété trouvé
+                                return true;
                             }
                         }
                     }
@@ -597,6 +573,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
     /**
      * Met à jour le compteur des matchs répétés affiché sur la page des brassages.
+     * (Cette fonction dépendra de l'existence d'un élément avec l'ID 'repeatedMatchesCount' et 'toggleRepeatedMatchesDisplay'
+     * dans la partie HTML ou dans les fonctions de rendu des pages. Elle est ici pour la logique.)
      */
     function updateRepeatedMatchesCountDisplay() {
         const repeatedMatchesCountSpan = document.getElementById('repeatedMatchesCount');
@@ -638,11 +616,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
     /**
      * Affiche une modale détaillant les phases où un match spécifique a été répété.
-     * @param {string} team1Name Nom de la première équipe.
-     * @param {string} team2Name Nom de la deuxième équipe.
-     * @param {string} team1Id ID de la première équipe.
-     * @param {string} team2Id ID de la deuxième équipe.
-     * @param {string} currentPhaseId ID de la phase actuelle.
      */
     function showRepeatedMatchDetailsModal(team1Name, team2Name, team1Id, team2Id, currentPhaseId) {
         const sortedIds = [team1Id, team2Id].sort();
@@ -677,7 +650,235 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         showModal(`Détails de la rencontre répétée`, modalContentDiv, () => hideModal());
     }
 
+    // --- Fonctions de Routage (seront définies dans Partie 5 mais dépendent de la visibilité) ---
+    // Déclarées ici pour que les autres fonctions (comme updateNavLinksVisibility) puissent les appeler
+    function renderHomePage() { /* sera défini dans Partie 5 */ }
+    function renderTournamentDashboard() { /* sera défini dans Partie 5 */ }
+    function renderEquipesPage() { /* sera défini dans Partie 5 */ }
+    function renderBrassagesPage() { /* sera défini dans Partie 5 */ }
+    function renderEliminatoiresPage() { /* sera défini dans Partie 5 */ }
+    function renderClassementsPage() { /* sera défini dans Partie 5 */ }
+    function renderAuthPage() { /* sera défini dans Partie 5 */ }
 
+    const routes = {
+        '#home': renderHomePage,
+        '#tournaments': renderTournamentDashboard,
+        '#equipes': renderEquipesPage,
+        '#brassages': renderBrassagesPage,
+        '#eliminatoires': renderEliminatoiresPage,
+        '#classements': renderClassementsPage,
+        '#auth': renderAuthPage
+    };
+
+    /**
+     * Gère le changement de route en fonction du hash de l'URL.
+     */
+    function handleLocationHash() {
+        let path = window.location.hash || '#auth'; // Par défaut, la page d'authentification ou d'accueil
+        
+        // Si l'utilisateur n'est pas connecté et qu'il n'est pas sur la page d'authentification,
+        // le rediriger vers la page d'authentification.
+        if (!window.userId && path !== '#auth') {
+            path = '#auth';
+            window.location.hash = '#auth'; // Mettre à jour l'URL pour refléter la redirection
+        } else if (window.userId && path === '#auth') {
+            // Si l'utilisateur est connecté et qu'il est sur la page d'authentification,
+            // le rediriger vers la page des tournois ou l'accueil si aucun tournoi sélectionné
+            if (!currentTournamentId) {
+                 path = '#tournaments';
+                 window.location.hash = '#tournaments';
+            } else {
+                 path = '#home';
+                 window.location.hash = '#home';
+            }
+        }
+        
+        const renderFunction = routes[path];
+        if (renderFunction) {
+            renderFunction();
+        } else {
+            console.warn(`Route inconnue: ${path}. Redirection vers l'accueil.`);
+            window.location.hash = '#home';
+        }
+        updateNavLinksVisibility(); // Mettre à jour la visibilité et les classes des liens de nav
+    }
+
+    /**
+     * Met à jour la visibilité et la classe 'active' des liens de navigation.
+     */
+    function updateNavLinksVisibility() {
+        // Mettre à jour la classe "active" de la navigation
+        document.querySelectorAll('.nav-link').forEach(link => {
+            if (link.getAttribute('href') === window.location.hash) {
+                link.classList.add('border-b-2', 'border-blue-200');
+            } else {
+                link.classList.remove('border-b-2', 'border-blue-200');
+            }
+        });
+
+        // Gérer la visibilité des liens de navigation
+        if (window.userId && currentTournamentId) {
+            // Utilisateur connecté et tournoi sélectionné : tout visible sauf auth
+            navLinks.home.classList.remove('hidden');
+            navLinks.equipes.classList.remove('hidden');
+            navLinks.brassages.classList.remove('hidden');
+            navLinks.eliminatoires.classList.remove('hidden');
+            navLinks.classements.classList.remove('hidden');
+            authInfoDiv.classList.remove('hidden'); // Contient email et bouton logout
+            userEmailSpan.textContent = window.auth.currentUser ? window.auth.currentUser.email || "Anonyme" : "Déconnecté";
+            logoutBtn.classList.remove('hidden');
+            selectTournamentBtn.classList.remove('hidden');
+            currentTournamentNameDisplay.classList.remove('hidden');
+        } else if (window.userId && !currentTournamentId) {
+            // Utilisateur connecté, mais aucun tournoi sélectionné : seulement tournois et auth visible
+            navLinks.home.classList.add('hidden');
+            navLinks.equipes.classList.add('hidden');
+            navLinks.brassages.classList.add('hidden');
+            navLinks.eliminatoires.classList.add('hidden');
+            navLinks.classements.classList.add('hidden');
+            authInfoDiv.classList.remove('hidden');
+            userEmailSpan.textContent = window.auth.currentUser ? window.auth.currentUser.email || "Anonyme" : "Déconnecté";
+            logoutBtn.classList.remove('hidden');
+            selectTournamentBtn.classList.remove('hidden'); // Toujours visible pour sélectionner un tournoi
+            currentTournamentNameDisplay.classList.add('hidden'); // Masquer le nom du tournoi si aucun sélectionné
+        } else {
+            // Non connecté : seulement tournois (pour s'inscrire/se connecter) et accueil, le reste masqué
+            navLinks.home.classList.remove('hidden');
+            navLinks.equipes.classList.add('hidden');
+            navLinks.brassages.classList.add('hidden');
+            navLinks.eliminatoires.classList.add('hidden');
+            navLinks.classements.classList.add('hidden');
+            authInfoDiv.classList.remove('hidden'); // Auth div visible pour login/register
+            userEmailSpan.textContent = "Déconnecté";
+            logoutBtn.classList.add('hidden');
+            selectTournamentBtn.classList.add('hidden');
+            currentTournamentNameDisplay.classList.add('hidden');
+        }
+        // Le lien "Tournois" (navTournaments) est toujours visible pour les utilisateurs connectés
+        if (navLinks.tournaments) {
+            navLinks.tournaments.classList.remove('hidden');
+        }
+    }
+
+
+    // --- Initialisation de l'Application ---
+    // Tout le code qui interagit avec le DOM doit être à l'intérieur de DOMContentLoaded
+    document.addEventListener('DOMContentLoaded', () => {
+        // 1. Initialisation des variables DOM ici, après que le document soit prêt
+        modal = document.getElementById('globalModal');
+        modalTitle = document.getElementById('modalTitle');
+        modalBody = document.getElementById('modalBody');
+        modalConfirmBtn = document.getElementById('modalConfirmBtn');
+        modalCancelBtn = document.getElementById('modalCancelBtn');
+        toastContainer = document.getElementById('toastContainer');
+
+        authInfoDiv = document.getElementById('authInfo');
+        userEmailSpan = document.getElementById('userEmail');
+        logoutBtn = document.getElementById('logoutBtn');
+        selectTournamentBtn = document.getElementById('selectTournamentBtn');
+        currentTournamentNameDisplay = document.getElementById('currentTournamentNameDisplay');
+
+        navLinks = {
+            home: document.getElementById('navHome'),
+            tournaments: document.getElementById('navTournaments'),
+            equipes: document.getElementById('navEquipes'),
+            brassages: document.getElementById('navBrassages'),
+            eliminatoires: document.getElementById('navEliminatoires'),
+            classements: document.getElementById('navClassements'),
+        };
+
+        // 2. Attacher les gestionnaires d'événements pour les boutons de la modale globale
+        if (modalCancelBtn) {
+            modalCancelBtn.addEventListener('click', hideModal);
+        } else {
+            console.error("modalCancelBtn non trouvé après DOMContentLoaded. Vérifiez l'HTML.");
+        }
+
+        // 3. Ajout de la transparence à la barre de navigation lors du défilement
+        const navBar = document.querySelector('nav');
+        if (navBar) {
+            let isScrolled = false;
+            window.addEventListener('scroll', () => {
+                if (window.scrollY > 0) {
+                    if (!isScrolled) {
+                        navBar.classList.add('bg-blue-700/70', 'transition-colors', 'duration-300');
+                        navBar.classList.remove('bg-blue-700/90');
+                        isScrolled = true;
+                    }
+                } else {
+                    if (isScrolled) {
+                        navBar.classList.remove('bg-blue-700/70');
+                        navBar.classList.add('bg-blue-700/90');
+                        isScrolled = false;
+                    }
+                }
+            });
+        } else {
+            console.warn("Barre de navigation (nav) non trouvée.");
+        }
+
+        // 4. Initialiser Firebase et l'authentification APRÈS que le DOM soit prêt
+        initializeFirebaseAndAuth();
+
+        // 5. Fonction de rappel appelée par initializeFirebaseAndAuth une fois Firebase initialisé et l'état d'authentification connu
+        window.onFirebaseReady = () => {
+            console.log("Firebase est prêt. Gestion du routage et chargement initial des données.");
+            handleLocationHash(); // Gère la route initiale et la visibilité des liens
+        };
+
+        // 6. Écouter les changements de hash dans l'URL pour le routage
+        window.addEventListener('hashchange', handleLocationHash);
+
+        // 7. Gestionnaire pour le bouton de déconnexion
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', async () => {
+                try {
+                    await window.signOut(window.auth);
+                    showToast("Déconnexion réussie !", "info");
+                    // Les variables globales et les listeners sont nettoyés dans le onAuthStateChanged
+                } catch (error) {
+                    console.error("Erreur de déconnexion:", error);
+                    showToast("Erreur lors de la déconnexion.", "error");
+                }
+            });
+        }
+
+        // 8. Gestionnaire pour le bouton "Changer de tournoi"
+        if (selectTournamentBtn) {
+            selectTournamentBtn.addEventListener('click', () => {
+                window.location.hash = '#tournaments';
+            });
+        }
+    });
+
+    // Rendre les fonctions globales nécessaires pour être appelées depuis d'autres parties du code ou directement par le HTML
+    window.showToast = showToast;
+    window.showModal = showModal;
+    window.hideModal = hideModal;
+    window.currentTournamentId = currentTournamentId; // Exposer pour l'accès aux autres parties
+    window.allTeams = allTeams; // Exposer pour l'accès aux autres parties
+    window.allBrassagePhases = allBrassagePhases; // Exposer
+    window.eliminationPhases = eliminationPhases; // Exposer
+    window.currentSecondaryGroupsPreview = currentSecondaryGroupsPreview; // Exposer
+    window.eliminatedTeams = eliminatedTeams; // Exposer
+    window.currentDisplayedPhaseId = currentDisplayedPhaseId; // Exposer
+    window.currentTournamentData = currentTournamentData; // Exposer
+    window.allUserTournaments = allUserTournaments; // Exposer
+
+    window.saveAllData = saveAllData;
+    window.loadAllData = loadAllData; // Peut être appelé si on veut recharger manuellement
+    window.createNewTournament = createNewTournament;
+    window.selectTournament = selectTournament;
+    window.deleteTournament = deleteTournament;
+    window.teamExists = teamExists;
+    window.isMatchRepeated = isMatchRepeated;
+    window.updateRepeatedMatchesCountDisplay = updateRepeatedMatchesCountDisplay;
+    window.showRepeatedMatchDetailsModal = showRepeatedMatchDetailsModal;
+    window.updateNavLinksVisibility = updateNavLinksVisibility;
+    window.updateTournamentDisplay = updateTournamentDisplay;
+    window.handleLocationHash = handleLocationHash; // Exposer pour pouvoir déclencher un routage
+
+})();
     // --- Fonctions de Gestion des Équipes ---
 
     /**
@@ -690,7 +891,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             showToast("Le nom de l'équipe ne peut pas être vide.", "error");
             return;
         }
-        if (teamExists(name)) { // Utilise la fonction teamExists
+        if (teamExists(name)) { // Utilise la fonction teamExists (définie en Partie 1)
             showToast(`L'équipe "${escapeHtml(name)}" existe déjà. Veuillez choisir un nom différent.`, "error");
             return;
         }
@@ -705,8 +906,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             level: level
         };
         allTeams.push(newTeam);
-        saveAllData();
-        // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+        saveAllData(); // Sauvegarde les données via la fonction globale (définie en Partie 1)
         showToast(`Équipe "${escapeHtml(name)}" ajoutée avec succès !`, "success");
     }
 
@@ -721,6 +921,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             showToast("Le nom de l'équipe ne peut pas être vide.", "error");
             return;
         }
+        // Vérifie si le nouveau nom existe déjà pour une AUTRE équipe
         if (teamExists(newName) && allTeams.find(t => t.id === id)?.name.toLowerCase() !== newName.toLowerCase()) {
             showToast(`Une équipe nommée "${escapeHtml(newName)}" existe déjà.`, "error");
             return;
@@ -734,8 +935,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         if (teamToUpdate) {
             teamToUpdate.name = newName.trim();
             teamToUpdate.level = newLevel;
-            saveAllData();
-            // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+            saveAllData(); // Sauvegarde les données
             showToast(`Équipe "${escapeHtml(newName)}" mise à jour.`, "success");
         } else {
             showToast("Équipe non trouvée.", "error");
@@ -781,8 +981,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         showModal('Confirmer la suppression', messageContent, () => {
             allTeams = allTeams.filter(team => team.id !== id);
             eliminatedTeams.delete(id); // S'assurer qu'elle est retirée des équipes éliminées si elle y était
-            saveAllData();
-            // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+            saveAllData(); // Sauvegarde les données
             showToast(`Équipe "${escapeHtml(teamToDelete.name)}" supprimée.`, "success");
         }, true);
     }
@@ -979,6 +1178,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         
         // Determine the actual teams to use for generation
         const teamsForGeneration = effectiveUseInitialLevels ? allTeams : (function() {
+            // getGlobalRankings est une fonction de la Partie 5, elle est rendue globale pour être accessible ici.
             const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
             const teamsWithScores = globalRankings.filter(r => r.totalPoints !== 0 || r.totalDiffScore !== 0).map(r => ({
                 id: r.teamObject.id,
@@ -1051,10 +1251,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         if (phaseIndex > -1) {
             allBrassagePhases[phaseIndex].pools = bestPools;
             allBrassagePhases[phaseIndex].generated = true; 
-            saveAllData();
-            // Le rendu est géré par onSnapshot après l'appel à saveAllData
-            // renderPhaseHistory();
-            // renderPoolsWithCurrentSettings(bestPools, allBrassagePhases[phaseIndex].name, phaseIdToUpdate);
+            saveAllData(); // Sauvegarde les données
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData, donc pas besoin de le faire ici.
 
             let successMessage = bestPools.length + " poule(s) générée(s) avec succès pour cette phase ! ";
             if (minRepetitions > 0) {
@@ -1095,7 +1293,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             const teamsAtLevel = teamsByExactLevel.get(level);
             if (!teamsAtLevel || teamsAtLevel.length === 0) {
                 requiredLevelsPresent = false;
-                // showToast(`Impossible de former des poules de ${requestedTeamsPerPool} équipes: il manque des équipes de niveau ${level}.`, "error");
                 return null; // Not enough teams at a specific level
             }
             maxPoolsThatCanBeFormed = Math.min(maxPoolsThatCanBeFormed, teamsAtLevel.length);
@@ -1176,7 +1373,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      */
     function _generatePoolsLogicRankingBased(teamsForThisGroup, requestedTeamsPerPool, msgElement) {
         if (teamsForThisGroup.length === 0) {
-            // showToast("Aucune équipe disponible pour former les poules dans ce groupe.", "error");
             return null;
         }
 
@@ -1184,7 +1380,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         const totalTeamsInGroup = teamsForThisGroup.length;
 
         if (numInternalTiers < 1) {
-            // showToast("Le nombre d'équipes par poule doit être au moins 1.", "error");
             return null;
         }
 
@@ -1212,7 +1407,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         }
 
         if (minTierSize === 0 || minTierSize === Infinity || minTierSize < 1) {
-            // showToast(`Pas assez d'équipes pour former des poules équilibrées de ${requestedTeamsPerPool} équipes à partir de ce groupe. Réduisez le nombre d'équipes par poule ou ajoutez des équipes.`, "error");
             return null;
         }
 
@@ -1309,6 +1503,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             return;
         }
 
+        // getGlobalRankings est une fonction de la Partie 5, elle est rendue globale pour être accessible ici.
         const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
         if (globalRankings.length === 0) {
             showToast("Aucune équipe classée disponible pour créer les groupes. Générez et terminez des phases de brassage initiales d'abord.", "error");
@@ -1351,6 +1546,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             }
         }
 
+        // renderSecondaryGroupsPreview est une fonction de la Partie 4, elle est rendue globale pour être accessible ici.
         renderSecondaryGroupsPreview(selectedGroupNames);
         saveAllData(); // Save the newly generated preview
         showToast(`Création des ${numGroups} groupes de niveau terminée. Ajustez si nécessaire.`, "success");
@@ -1387,14 +1583,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             </div>
         `;
 
-        // On ne passe pas de confirmCallback directe à showModal ici,
-        // car les boutons de la modale interne auront leurs propres callbacks.
-        // On utilise une modale "neutre" pour le conteneur.
         showModal(`Gérer l'équipe : ${escapeHtml(teamName)}`, modalContentDiv, () => { /* Aucune action par défaut */ });
 
         document.getElementById('moveTeamOptionBtn').addEventListener('click', () => {
             hideModal(); // Cacher la modale d'options
-            showMoveTeamModal(teamId, teamName, currentGroup, totalPoints, totalDiffScore, allGroupNames);
+            showMoveTeamModal(teamId, teamName, totalPoints, totalDiffScore, currentGroup, allGroupNames);
         });
 
         document.getElementById('toggleEliminationOptionBtn').addEventListener('click', () => {
@@ -1409,15 +1602,12 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             // Re-render la prévisualisation des groupes secondaires pour que les changements soient visibles
             const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
             const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+            // renderSecondaryGroupsPreview est une fonction de la Partie 4, elle est rendue globale pour être accessible ici.
             renderSecondaryGroupsPreview(groupNamesMap[parseInt(numberOfSecondaryGroupsInput.value)]);
             hideModal(); // Cacher la modale après l'action
         });
 
         // Ajuster les boutons de la modale principale pour qu'ils ne fassent rien
-        // lorsque cette modale d'options est ouverte.
-        // La "confirmCallback" passée à showModal était déjà vide, donc pas de conflit ici.
-        // Le bouton de confirmation de showModal restera visible mais inactif si aucune action n'y est assignée.
-        // On s'assure qu'il n'exécute rien de la modale parente.
         modalConfirmBtn.onclick = () => hideModal(); // Just hide the modal if the main confirm is clicked
         modalCancelBtn.onclick = () => hideModal(); // Just hide the modal if the main cancel is clicked
     }
@@ -1458,7 +1648,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
         showModal('Déplacer l\'équipe', formDiv, async () => {
             const newGroup = groupSelect.value;
-            const moveModalMessage = document.getElementById('moveModalMessage');
+            // const moveModalMessage = document.getElementById('moveModalMessage'); // Non utilisé pour l'instant
 
             if (newGroup === currentGroup) {
                 return; // hideModal is handled by showModal's callback
@@ -1498,12 +1688,13 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
             const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
             const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+            // renderSecondaryGroupsPreview est une fonction de la Partie 4, elle est rendue globale pour être accessible ici.
             renderSecondaryGroupsPreview(groupNamesMap[parseInt(numberOfSecondaryGroupsInput.value)]);
             saveAllData(); // Save the state after manual move
             showToast(`Équipe ${escapeHtml(teamToMove.name)} déplacée vers ${escapeHtml(toGroup)}.`, "success");
 
         } else {
-            console.error("ERROR: Team not found for movement:", teamId);
+            console.error("ERREUR: Équipe non trouvée pour le déplacement:", teamId);
         }
     }
 
@@ -1519,7 +1710,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         showModal('Valider les Groupes', messageContent, () => {
             if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
                 showToast("Aucun groupe à valider. Créez les groupes d'abord.", "error");
-                return; // hideModal is handled by showModal's callback
+                return;
             }
 
             // Remove only existing elimination seeding phases to avoid duplicates if re-validating
@@ -1560,6 +1751,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 return;
             }
 
+            // getGlobalRankings est une fonction de la Partie 5, elle est rendue globale pour être accessible ici.
             const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
             if (globalRankings.length === 0) {
                 showToast("Aucune équipe classée disponible. Veuillez générer et terminer des phases de brassage d'abord.", "error");
@@ -1686,9 +1878,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         if (!generationFailed && newPhases.length > 0 && newPhases.length === numGroups) {
             allBrassagePhases.push(...newPhases);
             await saveAllData();
-            // Le rendu est géré par onSnapshot après l'appel à saveAllData
-            // renderPhaseHistory();
-            // renderPoolsWithCurrentSettings(newPhases[0].pools, newPhases[0].name, newPhases[0].id);
             showToast(`${newPhases.length} phases de brassage secondaires générées avec succès !`, "success");
         } else if (generationFailed) {
             console.error("ERREUR: La génération des phases supplémentaires a échoué pour au moins un groupe.");
@@ -1710,21 +1899,27 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             allBrassagePhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING); // Keep only seeding phases
             currentSecondaryGroupsPreview = {}; // Clear secondary groups preview
             await saveAllData();
-
-            // Le rendu est géré par onSnapshot après l'appel à saveAllData
-            // renderPhaseHistory();
-            // poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
-            // currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
-            // currentDisplayedPhaseId = null;
-            // secondaryGroupsPreviewDisplay.innerHTML = '<p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Créer les groupes".</p>';
-            // validateSecondaryGroupsBtn.classList.add('hidden');
-            // generateSecondaryBrassagesBtn.classList.add('hidden');
-            // refreshSecondaryGroupScoresBtn.classList.add('hidden');
             showToast("Toutes les phases de brassage ont été supprimées.", "success");
         }, true); // Use red style for confirmation button
     }
-    // --- Fonctions de Rendu des Pages (Vues) ---
 
+    // Rendre les fonctions globales nécessaires pour être appelées depuis d'autres parties du code.
+    window.addTeam = addTeam;
+    window.updateTeam = updateTeam;
+    window.deleteTeam = deleteTeam;
+    window.isBrassagePhaseComplete = isBrassagePhaseComplete;
+    window.generateAndEvaluatePools = generateAndEvaluatePools;
+    window.generatePoolsForPhase = generatePoolsForPhase;
+    window._generatePoolsLogicInitialLevels = _generatePoolsLogicInitialLevels;
+    window._generatePoolsLogicRankingBased = _generatePoolsLogicRankingBased;
+    window._performSecondaryGroupsPreview = _performSecondaryGroupsPreview;
+    window.showTeamOptionsModal = showTeamOptionsModal;
+    window.showMoveTeamModal = showMoveTeamModal;
+    window.moveTeamBetweenSecondaryGroups = moveTeamBetweenSecondaryGroups;
+    window.validateSecondaryGroupsForElimination = validateSecondaryGroupsForElimination;
+    window.validateForDirectElimination = validateForDirectElimination;
+    window.generateSecondaryBrassagePhases = generateSecondaryBrassagePhases;
+    window.clearAllPhases = clearAllPhases;
     /**
      * Affiche la page d'authentification (connexion/inscription).
      */
@@ -1776,6 +1971,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 return;
             }
             try {
+                // Utilise les fonctions Firebase globalement exposées par Partie 1
                 await window.signInWithEmailAndPassword(window.auth, email, password);
                 showToast("Connexion réussie !", "success");
                 authMessage.textContent = "";
@@ -1799,6 +1995,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 return;
             }
             try {
+                // Utilise les fonctions Firebase globalement exposées par Partie 1
                 await window.createUserWithEmailAndPassword(window.auth, email, password);
                 showToast("Inscription réussie ! Vous êtes maintenant connecté.", "success");
                 authMessage.textContent = "";
@@ -1898,10 +2095,13 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         `;
     }
 
-
+    /**
+     * Affiche la page de gestion des équipes.
+     */
     function renderEquipesPage() {
         // Calculate team count by level
         let levelCounts = {};
+        // allTeams est une variable globale exposée par Partie 1
         allTeams.forEach(team => {
             levelCounts[team.level] = (levelCounts[team.level] || 0) + 1;
         });
@@ -1988,16 +2188,19 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         setupEquipesPageLogic();
     }
 
+    /**
+     * Logique de la page de gestion des équipes.
+     */
     function setupEquipesPageLogic() {
         const teamNameInput = document.getElementById('teamName');
         const teamLevelInput = document.getElementById('teamLevel');
         const addTeamBtn = document.getElementById('addTeamBtn');
         const teamsListDiv = document.getElementById('teamsList');
         const clearTeamsBtn = document.getElementById('clearTeamsBtn');
-        const messageElement = document.getElementById('message');
+        const messageElement = document.getElementById('message'); // Not directly used, but kept for consistency
         const excelFileInput = document.getElementById('excelFileInput');
         const importTeamsBtn = document.getElementById('importTeamsBtn');
-        const importMessageElement = document.getElementById('importMessage');
+        const importMessageElement = document.getElementById('importMessage'); // Not directly used, but kept for consistency
         const teamCountDisplay = document.getElementById('teamCountDisplay');
 
 
@@ -2068,6 +2271,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                                 <input type="number" id="editTeamLevel" class="w-full p-2 border border-gray-300 rounded-md" min="1" max="10" value="${escapeHtml(teamToEdit.level.toString())}">
                             </div>
                         `;
+                        // showModal est une fonction globale exposée par Partie 1
                         showModal('Éditer l\'équipe', formDiv, () => {
                             const newName = document.getElementById('editTeamName').value.trim();
                             const newLevel = parseInt(document.getElementById('editTeamLevel').value);
@@ -2076,7 +2280,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                                 showToast("Le nom de l'équipe ne peut pas être vide.", "error");
                                 return;
                             }
-                            // Check for duplicate name during edit, excluding the current team being edited
+                            // teamExists est une fonction globale exposée par Partie 1
                             if (teamExists(newName) && newName.toLowerCase() !== teamToEdit.name.toLowerCase()) {
                                 showToast(`Une équipe nommée "${escapeHtml(newName)}" existe déjà.`, "error");
                                 return;
@@ -2086,12 +2290,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                                 return;
                             }
 
-                            teamToEdit.name = newName;
-                            teamToEdit.level = newLevel;
-                            saveAllData();
-                            // Render is handled by onSnapshot
-                            // renderTeams();
-                            showToast(`Équipe "${escapeHtml(newName)}" mise à jour.`, "success");
+                            // updateTeam est une fonction globale exposée par Partie 2
+                            updateTeam(teamId, newName, newLevel);
                         });
                     }
                 });
@@ -2100,7 +2300,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             document.querySelectorAll('.delete-team-btn').forEach(button => {
                 button.addEventListener('click', (event) => {
                     const teamId = event.target.dataset.id;
-                    deleteTeam(teamId); // Call the unified deleteTeam function
+                    // deleteTeam est une fonction globale exposée par Partie 2
+                    deleteTeam(teamId);
                 });
             });
         }
@@ -2108,7 +2309,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         addTeamBtn.addEventListener('click', () => {
             const name = teamNameInput.value.trim();
             const level = parseInt(teamLevelInput.value);
-            addTeam(name, level); // Call the unified addTeam function
+            // addTeam est une fonction globale exposée par Partie 2
+            addTeam(name, level);
             teamNameInput.value = '';
             teamLevelInput.value = '5';
         });
@@ -2118,12 +2320,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             messageContent.textContent = "Êtes-vous sûr de vouloir supprimer TOUTES les équipes ? Cette action est irréversible.";
             messageContent.className = 'text-gray-700';
 
+            // showModal est une fonction globale exposée par Partie 1
             showModal('Confirmer la suppression de toutes les équipes', messageContent, () => {
-                allTeams = [];
-                eliminatedTeams.clear(); // Effacer toutes les équipes éliminées
-                saveAllData();
-                // Render is handled by onSnapshot
-                // renderTeams();
+                allTeams = []; // allTeams est une variable globale exposée par Partie 1
+                eliminatedTeams.clear(); // eliminatedTeams est une variable globale exposée par Partie 1
+                saveAllData(); // saveAllData est une fonction globale exposée par Partie 1
                 showToast("Toutes les équipes ont été supprimées.", "success");
             }, true);
         });
@@ -2138,6 +2339,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             const reader = new FileReader();
             reader.onload = (e) => {
                 const data = new Uint8Array(e.target.result);
+                // XLSX est chargé via un CDN dans index.html
                 const workbook = XLSX.read(data, { type: 'array' });
                 const firstSheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[firstSheetName];
@@ -2153,6 +2355,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     const level = parseInt(row['Niveau']); // Assurez-vous que le nom de la colonne est 'Niveau'
 
                     if (name && !isNaN(level) && level >= 1 && level <= 10) {
+                        // teamExists est une fonction globale exposée par Partie 1
                         if (teamExists(name)) {
                             skippedNames.push(name);
                             failedCount++;
@@ -2171,38 +2374,47 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 });
 
                 if (importedCount > 0) {
-                    allTeams.push(...newTeams);
-                    saveAllData();
-                    // Render is handled by onSnapshot
-                    // renderTeams();
+                    allTeams.push(...newTeams); // allTeams est une variable globale exposée par Partie 1
+                    saveAllData(); // saveAllData est une fonction globale exposée par Partie 1
                     let successMsg = `${importedCount} équipe(s) importée(s) avec succès.`;
                     if (skippedNames.length > 0) {
                         successMsg += ` ${failedCount} équipe(s) ignorée(s) (noms déjà existants ou données invalides) : ${skippedNames.map(escapeHtml).join(', ')}.`;
                     }
-                    showToast(successMsg, "success");
+                    showToast(successMsg, "success"); // showToast est une fonction globale exposée par Partie 1
                 } else if (json.length > 0) { // If there were rows, but none imported successfully
                      let errorMsg = "Aucune équipe n'a pu être importée.";
                      if (skippedNames.length > 0) {
                          errorMsg += ` Les équipes suivantes existent déjà : ${skippedNames.map(escapeHtml).join(', ')}.`;
                      }
                      errorMsg += " Vérifiez le format des colonnes ('Nom', 'Niveau') et la validité des données (niveau entre 1 et 10).";
-                     showToast(errorMsg, "error");
+                     showToast(errorMsg, "error"); // showToast est une fonction globale exposée par Partie 1
                 } else { // File was empty or only headers
-                    showToast("Aucune nouvelle équipe n'a été trouvée dans le fichier ou le fichier est vide.", "info");
+                    showToast("Aucune nouvelle équipe n'a été trouvée dans le fichier ou le fichier est vide.", "info"); // showToast est une fonction globale exposée par Partie 1
                 }
                 excelFileInput.value = ''; // Clear the input after processing
             };
             reader.onerror = (ex) => {
-                showToast("Erreur lors de la lecture du fichier : " + ex.message, "error");
+                showToast("Erreur lors de la lecture du fichier : " + ex.message, "error"); // showToast est une fonction globale exposée par Partie 1
                 console.error("Erreur de lecture de fichier:", ex);
             };
             reader.readAsArrayBuffer(file);
         });
 
-        renderTeams();
+        renderTeams(); // Initial render of teams when the page is loaded
     }
+
+    // Rendre les fonctions globales nécessaires pour être appelées depuis d'autres parties du code ou directement par le HTML
+    window.renderAuthPage = renderAuthPage;
+    window.setupAuthPageLogic = setupAuthPageLogic;
+    window.renderHomePage = renderHomePage;
+    window.renderEquipesPage = renderEquipesPage;
+    window.setupEquipesPageLogic = setupEquipesPageLogic;
+    /**
+     * Affiche la page de gestion des phases de brassage.
+     */
     function renderBrassagesPage() {
         // Find the last validated elimination seeding phase, if any
+        // allBrassagePhases est une variable globale exposée par Partie 1
         const lastSeedingPhase = allBrassagePhases
             .filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING && p.generated)
             .sort((a, b) => b.timestamp - a.timestamp)[0]; // Get the most recent one
@@ -2336,6 +2548,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         setupBrassagesPageLogic();
     }
 
+    /**
+     * Logique de la page de gestion des phases de brassage.
+     */
     function setupBrassagesPageLogic() {
         const addInitialBrassagePhaseBtn = document.getElementById('addInitialBrassagePhaseBtn');
         const phaseHistoryDiv = document.getElementById('phaseHistory');
@@ -2365,7 +2580,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         if (savedBasis === 'initialLevels') {
             basisInitialLevelsRadio.checked = true;
         } else if (savedBasis === 'previousResults') {
-            basisPreviousResultsRadio.checked = true; // Corrected ID
+            basisPreviousResultsRadio.checked = true;
         } else {
             basisInitialLevelsRadio.checked = true; // Default
         }
@@ -2380,7 +2595,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
         function renderPhaseHistory() {
             phaseHistoryDiv.innerHTML = '';
-            phaseCountDisplay.textContent = allBrassagePhases.length.toString();
+            phaseCountDisplay.textContent = allBrassagePhases.length.toString(); // allBrassagePhases est globale
 
             const sortedPhases = [...allBrassagePhases].sort((a, b) => a.timestamp - b.timestamp);
 
@@ -2388,7 +2603,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 phaseHistoryDiv.innerHTML = '<p class="text-gray-500 text-center">Aucune phase n\'a été créée pour le moment.</p>';
                 poolsDisplay.innerHTML = '<p class="text-gray-500 text-center">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
                 currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
-                currentDisplayedPhaseId = null;
+                currentDisplayedPhaseId = null; // currentDisplayedPhaseId est globale
                 generatePoolsBtn.classList.add('hidden');
                 deleteCurrentPhaseBtn.classList.add('hidden');
                 editCurrentPhaseBtn.classList.add('hidden');
@@ -2405,7 +2620,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 let phaseClass = 'p-3 rounded-md shadow-sm border ';
                 let statusText = '';
 
-                if (currentDisplayedPhaseId === phase.id) {
+                if (currentDisplayedPhaseId === phase.id) { // currentDisplayedPhaseId est globale
                     phaseClass += 'bg-blue-100 border-blue-300';
                 } else {
                     phaseClass += 'bg-white border-gray-200 hover:bg-gray-100 cursor-pointer';
@@ -2413,7 +2628,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
                 if (phase.generated) {
                     statusText = '<span class="text-green-600 font-semibold">(Générée)</span>';
-                    if (isBrassagePhaseComplete(phase)) {
+                    if (isBrassagePhaseComplete(phase)) { // isBrassagePhaseComplete est globale
                         statusText = '<span class="text-green-700 font-semibold">(Terminée)</span>';
                     } else if (phase.pools && phase.pools.length > 0) {
                         statusText = '<span class="text-orange-600 font-semibold">(En Cours)</span>';
@@ -2434,17 +2649,17 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
                 phaseEntry.addEventListener('click', (event) => {
                     const targetPhaseId = event.currentTarget.dataset.phaseId;
-                    currentDisplayedPhaseId = targetPhaseId;
+                    currentDisplayedPhaseId = targetPhaseId; // currentDisplayedPhaseId est globale
                     renderPhaseHistory(); // Re-render history to highlight active
                     displayCurrentPhasePools(targetPhaseId);
                 });
             });
 
             // After rendering history, if no phase is explicitly selected, try to display the latest non-seeding brassage phase
-            if (!currentDisplayedPhaseId && sortedPhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEeding).length > 0) {
+            if (!currentDisplayedPhaseId && sortedPhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING).length > 0) {
                 const latestBrassagePhase = sortedPhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING).pop();
                 if (latestBrassagePhase) {
-                    currentDisplayedPhaseId = latestBrassagePhase.id;
+                    currentDisplayedPhaseId = latestBrassagePhase.id; // currentDisplayedPhaseId est globale
                     displayCurrentPhasePools(currentDisplayedPhaseId);
                     renderPhaseHistory(); // Re-render to highlight it
                 }
@@ -2455,7 +2670,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         }
 
         function displayCurrentPhasePools(phaseId) {
-            const phase = allBrassagePhases.find(p => p.id === phaseId);
+            const phase = allBrassagePhases.find(p => p.id === phaseId); // allBrassagePhases est globale
             if (!phase) {
                 poolsDisplay.innerHTML = '<p class="text-gray-500 text-center">Phase introuvable.</p>';
                 currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
@@ -2483,7 +2698,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 generatePoolsBtn.classList.add('hidden'); // Hide the main one as we have an internal button
                 poolGenerationMessage.textContent = ''; // Clear previous message
                 document.getElementById('generatePoolsForSelectedPhaseBtn')?.addEventListener('click', () => {
-                    generatePoolsForPhase(phaseId);
+                    generatePoolsForPhase(phaseId); // generatePoolsForPhase est globale (Partie 2)
                 });
                 return;
             }
@@ -2493,7 +2708,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             const sortedBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING).sort((a,b) => a.timestamp - b.timestamp);
             const isFirstBrassagePhase = sortedBrassagePhases.length > 0 && sortedBrassagePhases[0].id === phase.id;
 
-            if (!isBrassagePhaseComplete(phase) || isFirstBrassagePhase) {
+            if (!isBrassagePhaseComplete(phase) || isFirstBrassagePhase) { // isBrassagePhaseComplete est globale (Partie 2)
                 generatePoolsBtn.classList.remove('hidden');
                 if (!isBrassagePhaseComplete(phase)) {
                     poolGenerationMessage.textContent = 'Vous pouvez re-générer les poules de cette phase si les scores ne sont pas encore tous saisis.';
@@ -2531,8 +2746,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                             <h5 class="text-md font-semibold text-gray-700 mb-2">Matchs:</h5>
                             <div class="space-y-3">
                                 ${pool.matches.map(match => {
-                                    const team1 = allTeams.find(t => t.id === match.team1Id);
-                                    const team2 = allTeams.find(t => t.id === match.team2Id);
+                                    const team1 = allTeams.find(t => t.id === match.team1Id); // allTeams est globale
+                                    const team2 = allTeams.find(t => t.id === match.team2Id); // allTeams est globale
                                     const team1Name = team1 ? escapeHtml(team1.name) : 'Équipe inconnue';
                                     const team2Name = team2 ? escapeHtml(team2.name) : 'Équipe inconnue';
 
@@ -2575,7 +2790,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
         // Function to update match score in allBrassagePhases and determine winner
         function updateMatchScore(phaseId, poolId, team1Id, team2Id, scoreType, value) {
-            const phase = allBrassagePhases.find(p => p.id === phaseId);
+            const phase = allBrassagePhases.find(p => p.id === phaseId); // allBrassagePhases est globale
             if (!phase) return;
 
             const pool = phase.pools.find(p => p.id === poolId);
@@ -2605,25 +2820,25 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     match.loserId = match.team1Id;
                 } else {
                     // Handle draw (e.g., set winner to null, show message)
-                    showToast("Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", "error");
+                    showToast("Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", "error"); // showToast est globale
                 }
             }
-            saveAllData(); // Save changes to Firestore
+            saveAllData(); // saveAllData est globale
             renderPhaseHistory(); // Re-render history to update status (e.g., "En Cours" to "Terminée")
             displayCurrentPhasePools(currentDisplayedPhaseId); // Re-render current pools to update winner styling
         }
 
 
         addInitialBrassagePhaseBtn.addEventListener('click', () => {
-            if (allTeams.length === 0) {
-                showToast("Veuillez ajouter des équipes avant de créer une phase.", "error");
+            if (allTeams.length === 0) { // allTeams est globale
+                showToast("Veuillez ajouter des équipes avant de créer une phase.", "error"); // showToast est globale
                 return;
             }
             const initialLevelBasisChecked = basisInitialLevelsRadio.checked;
             const previousResultsBasisChecked = basisPreviousResultsRadio.checked;
 
             if (!initialLevelBasisChecked && !previousResultsBasisChecked) {
-                showToast("Veuillez sélectionner une base de génération (niveaux initiaux ou résultats précédents).", "error");
+                showToast("Veuillez sélectionner une base de génération (niveaux initiaux ou résultats précédents).", "error"); // showToast est globale
                 return;
             }
 
@@ -2636,7 +2851,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 <p id="newPhaseNameError" class="text-red-500 text-sm mt-1"></p>
             `;
 
-            showModal('Nommer la Nouvelle Phase', messageContent, async () => {
+            showModal('Nommer la Nouvelle Phase', messageContent, async () => { // showModal est globale
                 const newPhaseNameInput = document.getElementById('newPhaseNameInput');
                 const newPhaseNameError = document.getElementById('newPhaseNameError');
                 const phaseName = newPhaseNameInput.value.trim();
@@ -2647,8 +2862,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 }
 
                 // Check for existing phase name
-                if (allBrassagePhases.some(p => p.name.toLowerCase() === phaseName.toLowerCase())) {
-                    newPhaseNameError.textContent = `Une phase nommée "${escapeHtml(phaseName)}" existe déjà.`;
+                if (allBrassagePhases.some(p => p.name.toLowerCase() === phaseName.toLowerCase())) { // allBrassagePhases est globale
+                    newPhaseNameError.textContent = `Une phase nommée "${escapeHtml(phaseName)}" existe déjà.`; // escapeHtml est globale
                     return; // Don't close modal
                 }
 
@@ -2656,8 +2871,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 const sortedBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING).sort((a,b) => a.timestamp - b.timestamp);
                 const lastBrassagePhase = sortedBrassagePhases.length > 0 ? sortedBrassagePhases[sortedBrassagePhases.length - 1] : null;
 
-                if (previousResultsBasisChecked && lastBrassagePhase && !isBrassagePhaseComplete(lastBrassagePhase)) {
-                    showToast(`Veuillez compléter tous les scores de la phase précédente ("${escapeHtml(lastBrassagePhase.name)}") avant de créer une nouvelle phase basée sur les résultats.`, "error");
+                if (previousResultsBasisChecked && lastBrassagePhase && !isBrassagePhaseComplete(lastBrassagePhase)) { // isBrassagePhaseComplete est globale
+                    showToast(`Veuillez compléter tous les scores de la phase précédente ("${escapeHtml(lastBrassagePhase.name)}") avant de créer une nouvelle phase basée sur les résultats.`, "error"); // showToast est globale
                     return; // Keep modal open and return
                 }
 
@@ -2670,38 +2885,37 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     generated: false,
                     timestamp: Date.now()
                 };
-                allBrassagePhases.push(newPhase);
-                currentDisplayedPhaseId = newPhase.id; // Automatically select and display new phase
-                saveAllData();
-                showToast(`Phase "${escapeHtml(phaseName)}" créée. Générez maintenant les poules.`, "success");
-                // The modal will be hidden by showModal's internal logic after successful confirm
+                allBrassagePhases.push(newPhase); // allBrassagePhases est globale
+                currentDisplayedPhaseId = newPhase.id; // currentDisplayedPhaseId est globale
+                saveAllData(); // saveAllData est globale
+                showToast(`Phase "${escapeHtml(phaseName)}" créée. Générez maintenant les poules.`, "success"); // showToast est globale
             });
         });
 
         generatePoolsBtn.addEventListener('click', () => {
-            if (currentDisplayedPhaseId) {
-                generatePoolsForPhase(currentDisplayedPhaseId);
+            if (currentDisplayedPhaseId) { // currentDisplayedPhaseId est globale
+                generatePoolsForPhase(currentDisplayedPhaseId); // generatePoolsForPhase est globale (Partie 2)
             } else {
-                showToast("Veuillez sélectionner une phase dans l'historique à gauche.", "error");
+                showToast("Veuillez sélectionner une phase dans l'historique à gauche.", "error"); // showToast est globale
             }
         });
 
         deleteCurrentPhaseBtn.addEventListener('click', () => {
-            if (!currentDisplayedPhaseId) {
-                showToast("Aucune phase sélectionnée à supprimer.", "error");
+            if (!currentDisplayedPhaseId) { // currentDisplayedPhaseId est globale
+                showToast("Aucune phase sélectionnée à supprimer.", "error"); // showToast est globale
                 return;
             }
-            const phaseToDelete = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId);
+            const phaseToDelete = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId); // allBrassagePhases est globale
             if (!phaseToDelete) {
-                showToast("Phase introuvable pour la suppression.", "error");
+                showToast("Phase introuvable pour la suppression.", "error"); // showToast est globale
                 return;
             }
 
             const messageContent = document.createElement('p');
-            messageContent.textContent = `Êtes-vous sûr de vouloir supprimer la phase "${escapeHtml(phaseToDelete.name)}" ? Cette action est irréversible.`;
+            messageContent.textContent = `Êtes-vous sûr de vouloir supprimer la phase "${escapeHtml(phaseToDelete.name)}" ? Cette action est irréversible.`; // escapeHtml est globale
             messageContent.className = 'text-gray-700';
 
-            showModal('Confirmer la suppression', messageContent, () => {
+            showModal('Confirmer la suppression', messageContent, () => { // showModal est globale
                 const sortedPhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING).sort((a,b) => a.timestamp - b.timestamp);
                 const phaseIndex = sortedPhases.findIndex(p => p.id === currentDisplayedPhaseId);
 
@@ -2709,30 +2923,26 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 if (phaseIndex !== -1 && phaseIndex < sortedPhases.length - 1) {
                     const nextPhase = sortedPhases[phaseIndex + 1];
                     if (nextPhase && nextPhase.type === PHASE_TYPE_SECONDARY_BRASSAGE) {
-                        showToast(`Impossible de supprimer cette phase car la phase suivante ("${escapeHtml(nextPhase.name)}") en dépend. Supprimez d'abord les phases dépendantes.`, "error");
+                        showToast(`Impossible de supprimer cette phase car la phase suivante ("${escapeHtml(nextPhase.name)}") en dépend. Supprimez d'abord les phases dépendantes.`, "error"); // escapeHtml est globale, showToast est globale
                         return;
                     }
                 }
 
-                allBrassagePhases = allBrassagePhases.filter(p => p.id !== currentDisplayedPhaseId);
-                saveAllData();
-                currentDisplayedPhaseId = null; // Clear selection after deletion
-                // Render is handled by onSnapshot
-                // renderPhaseHistory();
-                // poolsDisplay.innerHTML = '<p class="text-gray-500 text-center">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
-                // currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
-                showToast(`Phase "${escapeHtml(phaseToDelete.name)}" supprimée.`, "success");
+                allBrassagePhases = allBrassagePhases.filter(p => p.id !== currentDisplayedPhaseId); // allBrassagePhases est globale
+                saveAllData(); // saveAllData est globale
+                currentDisplayedPhaseId = null; // currentDisplayedPhaseId est globale
+                showToast(`Phase "${escapeHtml(phaseToDelete.name)}" supprimée.`, "success"); // escapeHtml est globale, showToast est globale
             }, true);
         });
 
         editCurrentPhaseBtn.addEventListener('click', () => {
-            if (!currentDisplayedPhaseId) {
-                showToast("Aucune phase sélectionnée à éditer.", "error");
+            if (!currentDisplayedPhaseId) { // currentDisplayedPhaseId est globale
+                showToast("Aucune phase sélectionnée à éditer.", "error"); // showToast est globale
                 return;
             }
-            const phaseToEdit = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId);
+            const phaseToEdit = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId); // allBrassagePhases est globale
             if (!phaseToEdit) {
-                showToast("Phase introuvable pour l'édition.", "error");
+                showToast("Phase introuvable pour l'édition.", "error"); // showToast est globale
                 return;
             }
 
@@ -2744,7 +2954,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 </div>
                 <p id="editPhaseNameError" class="text-red-500 text-sm mt-1"></p>
             `;
-            showModal('Renommer la Phase', formDiv, () => {
+            showModal('Renommer la Phase', formDiv, () => { // showModal est globale
                 const newName = document.getElementById('editPhaseName').value.trim();
                 const editPhaseNameError = document.getElementById('editPhaseNameError');
 
@@ -2753,40 +2963,38 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     return;
                 }
                 // Check for duplicate name, excluding the current phase being edited
-                if (allBrassagePhases.some(p => p.name.toLowerCase() === newName.toLowerCase() && p.id !== phaseToEdit.id)) {
-                    editPhaseNameError.textContent = `Une phase nommée "${escapeHtml(newName)}" existe déjà.`;
+                if (allBrassagePhases.some(p => p.name.toLowerCase() === newName.toLowerCase() && p.id !== phaseToEdit.id)) { // allBrassagePhases est globale
+                    editPhaseNameError.textContent = `Une phase nommée "${escapeHtml(newName)}" existe déjà.`; // escapeHtml est globale
                     return;
                 }
 
                 phaseToEdit.name = newName;
-                saveAllData();
-                // Render is handled by onSnapshot
-                // renderPhaseHistory();
-                // displayCurrentPhasePools(currentDisplayedPhaseId);
-                showToast(`Phase renommée en "${escapeHtml(newName)}".`, "success");
+                saveAllData(); // saveAllData est globale
+                showToast(`Phase renommée en "${escapeHtml(newName)}".`, "success"); // escapeHtml est globale, showToast est globale
             });
         });
 
-        clearAllPhasesBtn.addEventListener('click', clearAllPhases);
+        clearAllPhasesBtn.addEventListener('click', clearAllPhases); // clearAllPhases est globale (Partie 2)
 
         // --- Secondary Brassage Logic ---
-        previewSecondaryGroupsBtn.addEventListener('click', _performSecondaryGroupsPreview); // Call the renamed function directly
+        previewSecondaryGroupsBtn.addEventListener('click', _performSecondaryGroupsPreview); // _performSecondaryGroupsPreview est globale (Partie 2)
 
-        validateSecondaryGroupsBtn.addEventListener('click', validateSecondaryGroupsForElimination);
-        generateSecondaryBrassagesBtn.addEventListener('click', generateSecondaryBrassagePhases);
+        validateSecondaryGroupsBtn.addEventListener('click', validateSecondaryGroupsForElimination); // validateSecondaryGroupsForElimination est globale (Partie 2)
+        generateSecondaryBrassagesBtn.addEventListener('click', generateSecondaryBrassagePhases); // generateSecondaryBrassagePhases est globale (Partie 2)
         
         // This event listener should trigger a re-render of the secondary groups preview
         // based on the *current* global rankings, without re-assigning teams to groups.
         refreshSecondaryGroupScoresBtn.addEventListener('click', () => {
-            if (Object.keys(currentSecondaryGroupsPreview).length > 0) {
+            if (Object.keys(currentSecondaryGroupsPreview).length > 0) { // currentSecondaryGroupsPreview est globale
                 // Get current global rankings
+                // getGlobalRankings est une fonction de la Partie 5, elle est rendue globale pour être accessible ici.
                 const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
                 
                 // Create a temporary map for quick lookup of updated points/diff
                 const updatedTeamStats = new Map(globalRankings.map(r => [r.teamObject.id, { totalPoints: r.totalPoints, totalDiffScore: r.totalDiffScore }]));
 
                 // Update scores in the currentSecondaryGroupsPreview
-                for (const groupName in currentSecondaryGroupsPreview) {
+                for (const groupName in currentSecondaryGroupsPreview) { // currentSecondaryGroupsPreview est globale
                     currentSecondaryGroupsPreview[groupName] = currentSecondaryGroupsPreview[groupName].map(team => {
                         const stats = updatedTeamStats.get(team.id);
                         if (stats) {
@@ -2799,16 +3007,16 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 }
 
                 const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
-                renderSecondaryGroupsPreview(groupNamesMap[parseInt(numberOfSecondaryGroupsSelect.value)]);
-                saveAllData(); // Save the updated scores in preview
-                showToast("Scores des groupes secondaires actualisés.", "info");
+                renderSecondaryGroupsPreview(groupNamesMap[parseInt(numberOfSecondaryGroupsSelect.value)]); // renderSecondaryGroupsPreview est globale (définie ci-dessous)
+                saveAllData(); // saveAllData est globale
+                showToast("Scores des groupes secondaires actualisés.", "info"); // showToast est globale
             } else {
-                showToast("Aucun groupe à actualiser. Veuillez d'abord prévisualiser les groupes.", "info");
+                showToast("Aucun groupe à actualiser. Veuillez d'abord prévisualiser les groupes.", "info"); // showToast est globale
             }
         });
 
         if (validateForDirectEliminationBtn) { // Check if the button exists (it might not if a seeding phase is already validated)
-            validateForDirectEliminationBtn.addEventListener('click', validateForDirectElimination);
+            validateForDirectEliminationBtn.addEventListener('click', validateForDirectElimination); // validateForDirectElimination est globale (Partie 2)
         }
 
         // Initial render for brassage page
@@ -2826,12 +3034,12 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         const secondaryGroupsPreviewDisplay = document.getElementById('secondaryGroupsPreviewDisplay');
         const refreshSecondaryGroupScoresBtn = document.getElementById('refreshSecondaryGroupScoresBtn');
 
-        if (Object.keys(currentSecondaryGroupsPreview).length > 0) {
+        if (Object.keys(currentSecondaryGroupsPreview).length > 0) { // currentSecondaryGroupsPreview est globale
             const numGroups = Object.keys(currentSecondaryGroupsPreview).length;
             numberOfSecondaryGroupsInput.value = numGroups.toString();
 
             const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
-            renderSecondaryGroupsPreview(groupNamesMap[numGroups]);
+            renderSecondaryGroupsPreview(groupNamesMap[numGroups]); // renderSecondaryGroupsPreview est globale (définie ci-dessous)
             
             validateSecondaryGroupsBtn.classList.remove('hidden');
             generateSecondaryBrassagesBtn.classList.remove('hidden');
@@ -2859,7 +3067,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         secondaryGroupsPreviewDisplay.innerHTML = '';
         secondaryPreviewMessage.textContent = ''; // Clear any previous messages
 
-        if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
+        if (Object.keys(currentSecondaryGroupsPreview).length === 0) { // currentSecondaryGroupsPreview est globale
             secondaryGroupsPreviewDisplay.innerHTML = '<p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Prévisualiser les groupes secondaires".</p>';
             validateSecondaryGroupsBtn.classList.add('hidden');
             generateSecondaryBrassagesBtn.classList.add('hidden');
@@ -2874,9 +3082,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         // Check if any team in preview is eliminated
         const eliminatedTeamsInPreview = [];
         selectedGroupNames.forEach(groupName => {
-            if (currentSecondaryGroupsPreview[groupName]) {
+            if (currentSecondaryGroupsPreview[groupName]) { // currentSecondaryGroupsPreview est globale
                 currentSecondaryGroupsPreview[groupName].forEach(team => {
-                    if (eliminatedTeams.has(team.id)) {
+                    if (eliminatedTeams.has(team.id)) { // eliminatedTeams est globale
                         eliminatedTeamsInPreview.push(team);
                     }
                 });
@@ -2898,7 +3106,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         groupDisplayContainer.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
 
         selectedGroupNames.forEach(groupName => {
-            const teamsInGroup = currentSecondaryGroupsPreview[groupName] || [];
+            const teamsInGroup = currentSecondaryGroupsPreview[groupName] || []; // currentSecondaryGroupsPreview est globale
             const isGroupEmpty = teamsInGroup.length === 0;
 
             const groupDiv = document.createElement('div');
@@ -2908,9 +3116,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 <ul class="space-y-2">
                     ${isGroupEmpty ? '<li class="text-gray-500 italic">Aucune équipe dans ce groupe.</li>' : ''}
                     ${teamsInGroup.map(team => {
-                        const isEliminated = eliminatedTeams.has(team.id);
+                        const isEliminated = eliminatedTeams.has(team.id); // eliminatedTeams est globale
                         const eliminatedClass = isEliminated ? 'line-through text-red-500 italic' : '';
-                        const teamLevel = allTeams.find(t => t.id === team.id)?.level || 'N/A'; // Get original level
+                        const teamLevel = allTeams.find(t => t.id === team.id)?.level || 'N/A'; // allTeams est globale
 
                         return `
                             <li class="flex items-center justify-between group-team-entry p-2 bg-white rounded-md border border-gray-100 shadow-xs cursor-pointer hover:bg-gray-50"
@@ -2943,13 +3151,13 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 const totalDiffScore = parseInt(event.currentTarget.dataset.totalDiffScore);
                 const currentGroup = event.currentTarget.dataset.currentGroup;
 
-                showTeamOptionsModal(teamId, teamName, totalPoints, totalDiffScore, currentGroup, selectedGroupNames);
+                showTeamOptionsModal(teamId, teamName, totalPoints, totalDiffScore, currentGroup, selectedGroupNames); // showTeamOptionsModal est globale (Partie 2)
             });
         });
     }
 
     /**
-     * Rendu de la page d'élimination (setup des brackets).
+     * Rendu de la page de sélection des éliminatoires.
      */
     function renderEliminationSelectionPage() {
         APP_CONTAINER.innerHTML = `
@@ -2971,10 +3179,14 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         setupEliminationSelectionPageLogic();
     }
 
+    /**
+     * Logique de la page de sélection des éliminatoires.
+     */
     function setupEliminationSelectionPageLogic() {
         const selectionArea = document.getElementById('eliminationSelectionArea');
 
         // Find the last validated elimination seeding phase
+        // allBrassagePhases est une variable globale exposée par Partie 1
         const lastSeedingPhase = allBrassagePhases
             .filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING && p.generated)
             .sort((a, b) => b.timestamp - a.timestamp)[0];
@@ -3041,7 +3253,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             const teamsInSelectedGroup = groups[selectedGroupName] || [];
             
             // Filter out eliminated teams before determining eligible count
-            selectedTeamsForBracket = teamsInSelectedGroup.filter(team => !eliminatedTeams.has(team.id));
+            selectedTeamsForBracket = teamsInSelectedGroup.filter(team => !eliminatedTeams.has(team.id)); // eliminatedTeams est globale
 
             const eligibleTeamCount = selectedTeamsForBracket.length;
             bracketSizeSelect.innerHTML = '';
@@ -3065,6 +3277,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             }
 
             // Check if a bracket already exists for this group and size
+            // eliminationPhases est globale
             const existingBracket = eliminationPhases[selectedGroupName];
             if (existingBracket && existingBracket.size === parseInt(bracketSizeSelect.value)) {
                 viewExistingBracketBtn.classList.remove('hidden');
@@ -3087,30 +3300,30 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             const bracketSize = parseInt(bracketSizeSelect.value);
 
             if (!selectedGroupName || isNaN(bracketSize) || bracketSize < 2) {
-                showToast("Veuillez sélectionner un groupe et une taille d'arbre valide.", "error");
+                showToast("Veuillez sélectionner un groupe et une taille d'arbre valide.", "error"); // showToast est globale
                 return;
             }
 
             if (selectedTeamsForBracket.length < bracketSize) {
-                showToast(`Seulement ${selectedTeamsForBracket.length} équipes éligibles dans ce groupe. Impossible de générer un arbre de ${bracketSize} équipes.`, "error");
+                showToast(`Seulement ${selectedTeamsForBracket.length} équipes éligibles dans ce groupe. Impossible de générer un arbre de ${bracketSize} équipes.`, "error"); // showToast est globale
                 return;
             }
 
             const messageContent = document.createElement('p');
-            messageContent.textContent = `Êtes-vous sûr de vouloir générer un arbre éliminatoire de ${bracketSize} équipes pour le groupe "${escapeHtml(selectedGroupName)}"? Cette action écrasera un arbre existant pour ce groupe et cette taille.`;
+            messageContent.textContent = `Êtes-vous sûr de vouloir générer un arbre éliminatoire de ${bracketSize} équipes pour le groupe "${escapeHtml(selectedGroupName)}"? Cette action écrasera un arbre existant pour ce groupe et cette taille.`; // escapeHtml est globale
             messageContent.className = 'text-gray-700';
 
-            showModal('Confirmer la génération de l\'arbre', messageContent, () => {
-                generateEliminationBracket(selectedGroupName, bracketSize, selectedTeamsForBracket);
+            showModal('Confirmer la génération de l\'arbre', messageContent, () => { // showModal est globale
+                generateEliminationBracket(selectedGroupName, bracketSize, selectedTeamsForBracket); // generateEliminationBracket est définie ci-dessous
             }, true);
         });
 
         viewExistingBracketBtn.addEventListener('click', () => {
             const selectedGroupName = eliminationGroupSelect.value;
-            if (eliminationPhases[selectedGroupName]) {
+            if (eliminationPhases[selectedGroupName]) { // eliminationPhases est globale
                 window.location.hash = `#eliminatoires?group=${encodeURIComponent(selectedGroupName)}`;
             } else {
-                showToast("Aucun arbre existant pour ce groupe.", "error");
+                showToast("Aucun arbre existant pour ce groupe.", "error"); // showToast est globale
             }
         });
 
@@ -3126,11 +3339,21 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             `;
         }
     }
+
+    // Rendre les fonctions globales nécessaires pour être appelées depuis d'autres parties du code ou directement par le HTML
+    window.renderBrassagesPage = renderBrassagesPage;
+    window.setupBrassagesPageLogic = setupBrassagesPageLogic;
+    window.renderSecondaryGroupsPreview = renderSecondaryGroupsPreview; // Exposer pour être appelée par Partie 2
+    window.renderEliminationSelectionPage = renderEliminationSelectionPage;
+    window.setupEliminationSelectionPageLogic = setupEliminationSelectionPageLogic;
     // --- Logique du Classement (partagée) ---
 
     /**
      * Calcule le classement global des équipes basé sur les phases de brassage,
      * y compris les scores détaillés par phase.
+     * @param {Array<Object>} teams - Toutes les équipes.
+     * @param {Array<Object>} brassagePhases - Toutes les phases de brassage.
+     * @returns {Array<Object>} Classement trié des équipes.
      */
     function getGlobalRankings(teams, brassagePhases) {
         const rankings = new Map(); // Map: teamId -> { teamObject, totalPoints, totalDiffScore, detailsByPhase }
@@ -3233,7 +3456,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     }
 
     /**
-     * Rendu de la page d'élimination (setup des brackets).
+     * Rendu de la page des éliminatoires.
      */
     function renderEliminatoiresPage() {
         APP_CONTAINER.innerHTML = `
@@ -3266,10 +3489,12 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         setupEliminatoiresPageLogic();
     }
 
+    /**
+     * Logique de la page des éliminatoires.
+     */
     function setupEliminatoiresPageLogic() {
         const eliminationBracketsDisplay = document.getElementById('eliminationBracketsDisplay');
         const eliminationMessage = document.getElementById('eliminationMessage');
-        const generateEliminationPhasesBtn = document.getElementById('generateEliminationBracketBtn'); // This button is now on selection page
         const resetAllEliminationPhasesBtn = document.getElementById('resetAllEliminationPhasesBtn');
         const goToEliminationSelectionBtn = document.getElementById('goToEliminationSelectionBtn');
 
@@ -3288,9 +3513,13 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             return options;
         }
 
+        /**
+         * Récupère les équipes groupées par la dernière phase de "seeding" éliminatoire.
+         * @returns {Object|null} Les équipes groupées, ou null si aucune phase de seeding n'est trouvée.
+         */
         function getTeamsGroupedBySecondaryPhase() {
             // Find the latest 'elimination_seeding' phase
-            const latestEliminationSeedingPhase = allBrassagePhases
+            const latestEliminationSeedingPhase = allBrassagePhases // allBrassagePhases est globale
                 .filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING)
                 .sort((a, b) => b.timestamp - a.timestamp)[0];
 
@@ -3298,16 +3527,16 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 console.log("DEBUG: Secondary ranking phases found:", latestEliminationSeedingPhase.groupedTeams);
                 return latestEliminationSeedingPhase.groupedTeams;
             } else {
-                showToast("Aucune phase de classement secondaire (Principale, Consolante, Super Consolante) n'a été validée sur la page 'Brassages'. Veuillez les générer et les valider d'abord.", "error");
+                showToast("Aucune phase de classement secondaire (Principale, Consolante, Super Consolante) n'a été validée sur la page 'Brassages'. Veuillez les générer et les valider d'abord.", "error"); // showToast est globale
                 return null;
             }
         }
 
         /**
-         * Determines the round name based on the number of TEAMS in the round.
-         * This is more logical for tournament naming (e.g., "8th Final" means 8 matches, 16 teams)
-         * @param {number} numTeamsInRound The number of teams starting this round.
-         * @returns {string} The round name.
+         * Détermine le nom du tour en fonction du nombre d'ÉQUIPES dans le tour.
+         * C'est plus logique pour la nomination des tournois (par exemple, "8ème de Finale" signifie 8 matchs, 16 équipes)
+         * @param {number} numTeamsInRound Le nombre d'équipes commençant ce tour.
+         * @returns {string} Le nom du tour.
          */
         function getRoundNameFromTeamsCount(numTeamsInRound) {
             if (numTeamsInRound === 2) return 'Finale';
@@ -3320,10 +3549,16 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             return `Tour Éliminatoire (${numTeamsInRound} équipes)`; // Generic fallback
         }
 
-
+        /**
+         * Génère les données de l'arbre éliminatoire pour un groupe donné.
+         * @param {Array<Object>} teams - Les équipes éligibles pour le bracket.
+         * @param {string} groupType - Le type de groupe (e.g., "Principale").
+         * @param {number} bracketSize - La taille souhaitée de l'arbre (puissance de 2).
+         * @returns {Object} Les données de l'arbre généré.
+         */
         function generateBracketData(teams, groupType, bracketSize) {
             // NOUVEAU: Filtrer les équipes éliminées avant de générer le bracket
-            let eligibleTeamsInGroup = teams.filter(team => !eliminatedTeams.has(team.id));
+            let eligibleTeamsInGroup = teams.filter(team => !eliminatedTeams.has(team.id)); // eliminatedTeams est globale
 
             if (eligibleTeamsInGroup.length < 2) {
                 return { rounds: [], message: `Pas assez d'équipes éligibles dans le groupe ${groupType} pour un tournoi à élimination (${eligibleTeamsInGroup.length} équipe(s) restante(s)).` };
@@ -3419,7 +3654,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 // Collect winners from the *previous* actual playing round (if any)
                 prevRoundMatches.forEach(match => {
                     if (match.winnerId) {
-                        nextRoundParticipants.push(allTeams.find(t => t.id === match.winnerId) || { id: match.winnerId, name: 'À déterminer' });
+                        nextRoundParticipants.push(allTeams.find(t => t.id === match.winnerId) || { id: match.winnerId, name: 'À déterminer' }); // allTeams est globale
                     } else {
                         nextRoundParticipants.push({ id: null, name: 'À déterminer', placeholder: true });
                     }
@@ -3520,6 +3755,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             };
         }
 
+        /**
+         * Rend un arbre éliminatoire dans le DOM.
+         * @param {Object} bracketData - Les données de l'arbre à rendre.
+         * @param {HTMLElement} containerElement - L'élément DOM où rendre l'arbre.
+         */
 		function renderBracket(bracketData, containerElement) {
             if (!bracketData || !bracketData.bracket || bracketData.bracket.length === 0) {
                 containerElement.innerHTML = `<p class="text-gray-500 text-center">Aucun tournoi à afficher pour le groupe ${escapeHtml(bracketData.groupType || '')}.</p>`;
@@ -3600,6 +3840,10 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             });
         }
 
+        /**
+         * Met à jour le score d'un match éliminatoire et détermine le vainqueur.
+         * @param {Event} event - L'événement de changement d'entrée.
+         */
         function updateMatchScoreAndWinner(event) {
             const matchId = event.target.dataset.matchId;
             const teamNum = event.target.dataset.team;
@@ -3612,7 +3856,8 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             let targetBracket = null;
             let targetMatch = null;
 
-            for (const groupType in eliminationPhases) {
+            // Chercher le match dans toutes les phases éliminatoires
+            for (const groupType in eliminationPhases) { // eliminationPhases est globale
                 const bracket = eliminationPhases[groupType];
                 for (const round of bracket.bracket) {
                     for (const match of round.matches) {
@@ -3634,7 +3879,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             
             if ((!targetMatch.team1 || targetMatch.team1.id === null || targetMatch.team1.isBye) ||
                 (!targetMatch.team2 || targetMatch.team2.id === null || targetMatch.team2.isBye)) {
-                showToast("Ce match est un BYE ou ses équipes ne sont pas encore déterminées. Les scores ne peuvent pas être saisis.", "error");
+                showToast("Ce match est un BYE ou ses équipes ne sont pas encore déterminées. Les scores ne peuvent pas être saisis.", "error"); // showToast est globale
                 event.target.value = (teamNum === '1' ? targetMatch.score1 : targetMatch.score2) || '';
                 return;
             }
@@ -3657,11 +3902,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     targetMatch.winnerId = targetMatch.team2.id;
                     targetMatch.loserId = targetMatch.team1.id;
                 } else {
-                    showToast("Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", "error");
+                    showToast("Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", "error"); // showToast est globale
                 }
             }
 
-            saveAllData();
+            saveAllData(); // saveAllData est globale
 
             const matchElement = document.querySelector(`[data-match-id="${matchId}"]`);
             if (matchElement) {
@@ -3682,22 +3927,33 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
             propagateWinnerLoser(targetMatch.id, targetMatch.winnerId, targetMatch.loserId, targetBracket);
 
-            renderBracket(targetBracket, document.getElementById(targetBracket.groupType.toLowerCase() + 'Bracket'));
+            // Re-render the specific bracket to update dynamic content
+            if (targetBracket && document.getElementById(targetBracket.groupType.toLowerCase() + 'Bracket')) {
+                renderBracket(targetBracket, document.getElementById(targetBracket.groupType.toLowerCase() + 'Bracket'));
+            }
+
 
             if (targetMatch.winnerId) {
-                showToast(`Score pour ${escapeHtml(targetMatch.team1.name)} vs ${escapeHtml(targetMatch.team2.name)} mis à jour et vainqueur déterminé !`, "success");
+                showToast(`Score pour ${escapeHtml(targetMatch.team1.name)} vs ${escapeHtml(targetMatch.team2.name)} mis à jour et vainqueur déterminé !`, "success"); // showToast est globale
             } else {
-                showToast("Saisie du score en cours...", "info");
+                showToast("Saisie du score en cours...", "info"); // showToast est globale
             }
         }
 
+        /**
+         * Propage le vainqueur et le perdant d'un match aux matchs suivants dans l'arbre.
+         * @param {string} sourceMatchId - L'ID du match dont le résultat est propagé.
+         * @param {string|null} winnerId - L'ID du vainqueur du match source.
+         * @param {string|null} loserId - L'ID du perdant du match source.
+         * @param {Object} bracket - L'objet de l'arbre éliminatoire.
+         */
         function propagateWinnerLoser(sourceMatchId, winnerId, loserId, bracket) {
             const sourceMatch = bracket.bracket.flatMap(r => r.matches).find(m => m.id === sourceMatchId);
             if (!sourceMatch) return;
 
             // Get the actual team objects based on IDs
-            const winningTeamObject = allTeams.find(t => t.id === winnerId) || { id: winnerId, name: 'À déterminer' };
-            const losingTeamObject = allTeams.find(t => t.id === loserId) || { id: loserId, name: 'À déterminer' };
+            const winningTeamObject = allTeams.find(t => t.id === winnerId) || { id: winnerId, name: 'À déterminer' }; // allTeams est globale
+            const losingTeamObject = allTeams.find(t => t.id === loserId) || { id: loserId, name: 'À déterminer' }; // allTeams est globale
 
             bracket.bracket.forEach(round => {
                 round.matches.forEach(match => {
@@ -3733,7 +3989,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                         const semiFinalMatch2 = bracket.bracket.flatMap(r => r.matches).find(m => m.id === match.prevMatch2LoserId);
 
                         if (sourceMatch.id === semiFinalMatch1?.id && semiFinalMatch1.loserId) {
-                            const actualLoserTeam = allTeams.find(t => t.id === semiFinalMatch1.loserId);
+                            const actualLoserTeam = allTeams.find(t => t.id === semiFinalMatch1.loserId); // allTeams est globale
                             if (actualLoserTeam) {
                                 match.team1 = { id: actualLoserTeam.id, name: actualLoserTeam.name };
                                 if (match.team1.id && match.team2?.id && (match.score1 !== null || match.score2 !== null || match.winnerId !== null)) {
@@ -3745,7 +4001,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                             }
                         }
                         if (sourceMatch.id === semiFinalMatch2?.id && semiFinalMatch2.loserId) {
-                            const actualLoserTeam = allTeams.find(t => t.id === semiFinalMatch2.loserId);
+                            const actualLoserTeam = allTeams.find(t => t.id === semiFinalMatch2.loserId); // allTeams est globale
                             if (actualLoserTeam) {
                                 match.team2 = { id: actualLoserTeam.id, name: actualLoserTeam.name };
                                 if (match.team1?.id && match.team2.id && (match.score1 !== null || match.score2 !== null || match.winnerId !== null)) {
@@ -3759,27 +4015,35 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     }
                 });
             });
-            saveAllData();
+            saveAllData(); // saveAllData est globale
         }
 
+        /**
+         * Génère un nouvel arbre éliminatoire pour un groupe donné.
+         * @param {string} groupName - Le nom du groupe.
+         * @param {number} bracketSize - La taille de l'arbre.
+         * @param {Array<Object>} teamsForBracket - Les équipes à inclure dans l'arbre.
+         */
         function generateEliminationBracket(groupName, bracketSize, teamsForBracket) {
             const bracketData = generateBracketData(teamsForBracket, groupName, bracketSize);
             if (bracketData.bracket.length > 0) {
-                eliminationPhases[groupName] = bracketData;
-                saveAllData(); // Save the newly generated bracket
+                eliminationPhases[groupName] = bracketData; // eliminationPhases est globale
+                saveAllData(); // saveAllData est globale
 
                 const groupContainer = document.createElement('div');
                 groupContainer.id = groupName.toLowerCase() + 'Bracket';
                 groupContainer.className = 'bg-white p-4 rounded-lg shadow-xl';
                 eliminationBracketsDisplay.appendChild(groupContainer);
                 renderBracket(bracketData, groupContainer);
-                showToast(`Arbre éliminatoire pour le groupe "${escapeHtml(groupName)}" généré avec succès !`, "success");
+                showToast(`Arbre éliminatoire pour le groupe "${escapeHtml(groupName)}" généré avec succès !`, "success"); // showToast est globale
             } else {
-                showToast(bracketData.message || `Impossible de générer l'arbre pour le groupe ${escapeHtml(groupName)}.`, "error");
+                showToast(bracketData.message || `Impossible de générer l'arbre pour le groupe ${escapeHtml(groupName)}.`, "error"); // showToast est globale
             }
         }
 
-
+        /**
+         * Rend tous les arbres éliminatoires existants.
+         */
         function renderAllEliminationBrackets() {
             eliminationBracketsDisplay.innerHTML = '';
             const orderedGroupTypes = ["Principale", "Consolante", "Super Consolante"];
@@ -3787,7 +4051,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             let hasBracketsToDisplay = false;
 
             orderedGroupTypes.forEach(groupType => {
-                const bracketData = eliminationPhases[groupType];
+                const bracketData = eliminationPhases[groupType]; // eliminationPhases est globale
                 if (bracketData && bracketData.bracket && bracketData.bracket.length > 0) {
                     hasBracketsToDisplay = true;
                     const groupContainer = document.createElement('div');
@@ -3808,49 +4072,56 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
             }
         }
 
+        /**
+         * Réinitialise toutes les phases éliminatoires.
+         */
         function resetAllEliminationPhases() {
             const messageContent = document.createElement('p');
             messageContent.textContent = "Êtes-vous sûr de vouloir réinitialiser TOUTES les phases éliminatoires ? Cette action est irréversible.";
             messageContent.className = 'text-gray-700';
 
-            showModal('Confirmer la réinitialisation complète', messageContent, () => {
-                eliminationPhases = {};
-                saveAllData();
+            showModal('Confirmer la réinitialisation complète', messageContent, () => { // showModal est globale
+                eliminationPhases = {}; // eliminationPhases est globale
+                saveAllData(); // saveAllData est globale
                 renderAllEliminationBrackets(); // Re-render to show empty state
-                showToast("Toutes les phases éliminatoires ont été réinitialisées.", "success");
+                showToast("Toutes les phases éliminatoires ont été réinitialisées.", "success"); // showToast est globale
             }, true);
         }
 
+        /**
+         * Réinitialise une phase éliminatoire pour un groupe spécifique.
+         * @param {string} groupType - Le type de groupe à réinitialiser.
+         */
         function resetGroupEliminationPhase(groupType) {
             const messageContent = document.createElement('p');
             messageContent.textContent = `Êtes-vous sûr de vouloir réinitialiser la phase éliminatoire pour le groupe "${escapeHtml(groupType)}" ? Cette action est irréversible.`;
             messageContent.className = 'text-gray-700';
 
-            showModal(`Confirmer la réinitialisation du groupe ${escapeHtml(groupType)}`, messageContent, () => {
+            showModal(`Confirmer la réinitialisation du groupe ${escapeHtml(groupType)}`, messageContent, () => { // showModal est globale
                 const groupedTeams = getTeamsGroupedBySecondaryPhase();
                 if (groupedTeams && groupedTeams[groupType]) {
-                    const latestSeedingPhase = allBrassagePhases
+                    const latestSeedingPhase = allBrassagePhases // allBrassagePhases est globale
                         .filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING && p.generated)
                         .sort((a, b) => b.timestamp - a.timestamp)[0];
 
                     if (latestSeedingPhase && latestSeedingPhase.groupedTeams[groupType]) {
                         const teamsFromSeeding = latestSeedingPhase.groupedTeams[groupType];
-                        const bracketSize = eliminationPhases[groupType] ? eliminationPhases[groupType].size : null;
+                        const bracketSize = eliminationPhases[groupType] ? eliminationPhases[groupType].size : null; // eliminationPhases est globale
 
                         if (bracketSize) {
                             const newBracketData = generateBracketData(teamsFromSeeding, groupType, bracketSize);
-                            eliminationPhases[groupType] = newBracketData;
-                            saveAllData();
+                            eliminationPhases[groupType] = newBracketData; // eliminationPhases est globale
+                            saveAllData(); // saveAllData est globale
                             renderBracket(newBracketData, document.getElementById(groupType.toLowerCase() + 'Bracket'));
-                            showToast(`Phase éliminatoire pour le groupe "${escapeHtml(groupType)}" réinitialisée.`, "success");
+                            showToast(`Phase éliminatoire pour le groupe "${escapeHtml(groupType)}" réinitialisée.`, "success"); // showToast est globale
                         } else {
-                            showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : taille d'arbre non définie. Veuillez re-générer l'arbre via "Configurer l'arbre éliminatoire".`, "error");
+                            showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : taille d'arbre non définie. Veuillez re-générer l'arbre via "Configurer l'arbre éliminatoire".`, "error"); // showToast est globale
                         }
                     } else {
-                        showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : données de répartition manquantes.`, "error");
+                        showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : données de répartition manquantes.`, "error"); // showToast est globale
                     }
                 } else {
-                     showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : groupe non configuré.`, "error");
+                     showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : groupe non configuré.`, "error"); // showToast est globale
                 }
             }, true);
         }
@@ -3872,6 +4143,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         });
     }
 
+    /**
+     * Rend la page des classements.
+     */
     function renderClassementsPage() {
         APP_CONTAINER.innerHTML = `
             <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Classements du Tournoi</h1>
@@ -3916,6 +4190,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         setupClassementsPageLogic();
     }
 
+    /**
+     * Logique de la page des classements.
+     */
     function setupClassementsPageLogic() {
         const rankingsTableBody = document.getElementById('rankingsTableBody');
         const rankingsMessage = document.getElementById('rankingsMessage');
@@ -3923,7 +4200,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         const phaseDetailsDisplay = document.getElementById('phaseDetailsDisplay');
 
         function renderRankings() {
-            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases); // allTeams et allBrassagePhases sont globales
 
             if (globalRankings.length === 0) {
                 rankingsTableBody.innerHTML = `
@@ -3939,7 +4216,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
             rankingsTableBody.innerHTML = globalRankings.map((rankEntry, index) => {
                 const teamName = escapeHtml(rankEntry.teamObject.name);
-                const isEliminated = eliminatedTeams.has(rankEntry.teamObject.id);
+                const isEliminated = eliminatedTeams.has(rankEntry.teamObject.id); // eliminatedTeams est globale
                 const teamClass = isEliminated ? 'line-through text-red-600' : 'text-gray-900';
                 const eliminatedText = isEliminated ? ' (Éliminée)' : '';
 
@@ -3965,7 +4242,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                 return;
             }
 
-            const relevantPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE);
+            const relevantPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE); // allBrassagePhases est globale
 
             if (relevantPhases.length === 0) {
                 phaseDetailsDisplay.innerHTML = '<p class="text-gray-500 text-center">Aucune phase de brassage avec des détails à afficher.</p>';
@@ -4093,26 +4370,26 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         const newTournamentDateInput = document.getElementById('newTournamentDate');
         const newTournamentNumTeamsInput = document.getElementById('newTournamentNumTeams');
         const createTournamentBtn = document.getElementById('createTournamentBtn');
-        const createTournamentMessage = document.getElementById('createTournamentMessage');
+        const createTournamentMessage = document.getElementById('createTournamentMessage'); // Non utilisé directement ici
         const tournamentsListDiv = document.getElementById('tournamentsList');
 
         createTournamentBtn.addEventListener('click', () => {
             const name = newTournamentNameInput.value.trim();
             const date = newTournamentDateInput.value;
             const numTeams = parseInt(newTournamentNumTeamsInput.value);
-            createNewTournament(name, date, numTeams);
+            createNewTournament(name, date, numTeams); // createNewTournament est globale
         });
 
         function renderTournamentsList() {
             tournamentsListDiv.innerHTML = '';
-            if (allUserTournaments.length === 0) {
+            if (allUserTournaments.length === 0) { // allUserTournaments est globale
                 tournamentsListDiv.innerHTML = '<p class="text-gray-500 text-center">Aucun tournoi disponible. Créez-en un nouveau !</p>';
                 return;
             }
 
-            allUserTournaments.forEach(tournament => {
-                const isOwner = tournament.ownerId === window.userId;
-                const isSelected = currentTournamentId === tournament.id;
+            allUserTournaments.forEach(tournament => { // allUserTournaments est globale
+                const isOwner = tournament.ownerId === window.userId; // window.userId est globale
+                const isSelected = currentTournamentId === tournament.id; // currentTournamentId est globale
                 const tourneyDiv = document.createElement('div');
                 tourneyDiv.className = `flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 bg-white border rounded-md shadow-sm ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'}`;
                 
@@ -4136,13 +4413,13 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
             document.querySelectorAll('.select-tournament-btn').forEach(button => {
                 button.addEventListener('click', (event) => {
-                    selectTournament(event.target.dataset.id);
+                    selectTournament(event.target.dataset.id); // selectTournament est globale
                 });
             });
 
             document.querySelectorAll('.delete-tournament-btn').forEach(button => {
                 button.addEventListener('click', (event) => {
-                    deleteTournament(event.target.dataset.id);
+                    deleteTournament(event.target.dataset.id); // deleteTournament est globale
                 });
             });
         }
@@ -4150,188 +4427,11 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
         renderTournamentsList();
     }
 
-    // --- Routage et Initialisation ---
-
-    /**
-     * Gère les changements de hash dans l'URL pour la navigation.
-     */
-    function handleLocationHash() {
-        const path = window.location.hash.substring(1); // Supprime le '#' initial
-        console.log("Navigating to:", path);
-
-        // Mettre à jour la visibilité des liens de navigation en premier
-        updateNavLinksVisibility();
-        updateTournamentDisplay(); // S'assurer que le nom du tournoi est à jour
-
-        // Mise à jour de la classe "active" de la navigation
-        document.querySelectorAll('.nav-link').forEach(link => {
-            const linkPath = link.getAttribute('href').substring(1);
-            if (linkPath === path) {
-                link.classList.add('border-b-2', 'border-blue-200');
-            } else {
-                link.classList.remove('border-b-2', 'border-blue-200');
-            }
-        });
-
-        // Rediriger si l'utilisateur n'est pas connecté ou n'a pas de tournoi sélectionné
-        if (!window.userId) {
-            if (path !== 'auth') {
-                window.location.hash = '#auth';
-            }
-            renderAuthPage();
-            return;
-        }
-
-        if (!currentTournamentId && path !== 'tournaments') {
-            window.location.hash = '#tournaments'; // Rediriger vers le tableau de bord des tournois
-            renderTournamentDashboard();
-            return;
-        }
-
-        switch (path) {
-            case 'home':
-                renderHomePage();
-                break;
-            case 'equipes':
-                renderEquipesPage();
-                break;
-            case 'brassages':
-                renderBrassagesPage();
-                break;
-            case 'eliminatoires':
-                renderEliminatoiresPage();
-                break;
-            case 'classements':
-                renderClassementsPage();
-                break;
-            case 'elimination-selection':
-                renderEliminationSelectionPage();
-                break;
-            case 'tournaments': // Nouvelle route pour le tableau de bord des tournois
-                renderTournamentDashboard();
-                break;
-            case 'auth': // Si déjà connecté, rediriger vers le tableau de bord des tournois
-                window.location.hash = '#tournaments';
-                renderTournamentDashboard();
-                break;
-            default:
-                // Si la route est inconnue ou vide, rediriger vers le tableau de bord des tournois
-                console.warn(`Route inconnue: ${path}. Redirection vers le tableau de bord des tournois.`);
-                window.location.hash = '#tournaments';
-                renderTournamentDashboard();
-        }
-    }
-
-    /**
-     * Met à jour la visibilité des liens de navigation en fonction de l'état d'authentification
-     * et de la sélection d'un tournoi.
-     */
-    function updateNavLinksVisibility() {
-        const isLoggedIn = !!window.userId;
-        const tournamentSelected = !!currentTournamentId;
-
-        // Ensure authInfoDiv and userEmailSpan exist before trying to manipulate them
-        if (authInfoDiv) {
-            authInfoDiv.classList.toggle('hidden', !isLoggedIn);
-        }
-        if (userEmailSpan && window.auth.currentUser) {
-            userEmailSpan.textContent = window.auth.currentUser.email;
-        }
-
-
-        // Afficher/masquer les liens de navigation principaux
-        // Utiliser un check pour s'assurer que l'élément existe avant d'accéder à classList
-        if (navLinks.home) navLinks.home.classList.toggle('hidden', !isLoggedIn); // Home is always visible if logged in
-        if (navLinks.tournaments) navLinks.tournaments.classList.toggle('hidden', !isLoggedIn); // Tournaments is always visible if logged in
-        if (navLinks.equipes) navLinks.equipes.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
-        if (navLinks.brassages) navLinks.brassages.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
-        if (navLinks.eliminatoires) navLinks.eliminatoires.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
-        if (navLinks.classements) navLinks.classements.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
-        // Le lien des collaborateurs est maintenant toujours caché ou supprimé de l'HTML
-        // Si navLinks.collaborators n'existe pas, cette ligne ne fera rien
-        if (navLinks.collaborators) navLinks.collaborators.classList.add('hidden');
-    }
-
-    // --- Initialisation de l'Application ---
-    document.addEventListener('DOMContentLoaded', () => {
-        // Attacher les gestionnaires d'événements pour les boutons de la modale globale
-        if (modalCancelBtn) {
-            modalCancelBtn.addEventListener('click', hideModal);
-        } else {
-            console.error("modalCancelBtn non trouvé au chargement du DOM.");
-        }
-        // Le modalConfirmBtn est géré dynamiquement dans showModal()
-
-        // Ajout de la transparence à la barre de navigation lors du défilement
-        const navBar = document.querySelector('nav');
-        if (navBar) { // Vérifier si la navBar existe
-            let isScrolled = false;
-            window.addEventListener('scroll', () => {
-                if (window.scrollY > 0) {
-                    if (!isScrolled) {
-                        navBar.classList.add('bg-blue-700/70', 'transition-colors', 'duration-300'); // Plus transparent
-                        navBar.classList.remove('bg-blue-700/90');
-                        isScrolled = true;
-                    }
-                } else {
-                    if (isScrolled) {
-                        navBar.classList.remove('bg-blue-700/70');
-                        navBar.classList.add('bg-blue-700/90'); // Moins transparent
-                        isScrolled = false;
-                    }
-                }
-            });
-        } else {
-            console.warn("Barre de navigation (nav) non trouvée.");
-        }
-
-        // Fonction de rappel appelée par index.html une fois Firebase initialisé et l'état d'authentification connu
-        window.onFirebaseReady = () => {
-            console.log("Firebase est prêt. Chargement des données et gestion du routage.");
-            if (window.userId) {
-                loadAllData();
-            } else {
-                handleLocationHash();
-            }
-        };
-
-        // Écouter les changements de hash dans l'URL pour le routage
-        window.addEventListener('hashchange', handleLocationHash);
-
-        // Gestionnaire pour le bouton de déconnexion
-        if (logoutBtn) { // Ensure logoutBtn exists
-            logoutBtn.addEventListener('click', async () => {
-                try {
-                    await window.signOut(window.auth);
-                    showToast("Déconnexion réussie !", "info");
-                    // Réinitialiser les variables globales du tournoi
-                    currentTournamentId = null;
-                    currentTournamentData = null;
-                    allTeams = [];
-                    allBrassagePhases = [];
-                    eliminationPhases = {};
-                    currentSecondaryGroupsPreview = {};
-                    eliminatedTeams = new Set();
-                    currentDisplayedPhaseId = null;
-                    allUserTournaments = [];
-                    if (window.currentTournamentUnsubscribe) {
-                        window.currentTournamentUnsubscribe(); // Détacher le listener du tournoi
-                        window.currentTournamentUnsubscribe = null;
-                    }
-                    handleLocationHash(); // Rediriger vers la page d'authentification
-                } catch (error) {
-                    console.error("Erreur de déconnexion:", error);
-                    showToast("Erreur lors de la déconnexion.", "error");
-                }
-            });
-        }
-
-        // Gestionnaire pour le bouton "Changer de tournoi"
-        if (selectTournamentBtn) { // Ensure selectTournamentBtn exists
-            selectTournamentBtn.addEventListener('click', () => {
-                window.location.hash = '#tournaments';
-            });
-        }
-    });
-
-})();
+    // Rendre les fonctions globales nécessaires pour être appelées depuis d'autres parties du code ou directement par le HTML
+    window.getGlobalRankings = getGlobalRankings;
+    window.renderEliminatoiresPage = renderEliminatoiresPage;
+    window.setupEliminatoiresPageLogic = setupEliminatoiresPageLogic;
+    window.renderClassementsPage = renderClassementsPage;
+    window.setupClassementsPageLogic = setupClassementsPageLogic;
+    window.renderTournamentDashboard = renderTournamentDashboard;
+    window.setupTournamentDashboardLogic = setupTournamentDashboardLogic;
