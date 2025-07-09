@@ -5,7 +5,7 @@ import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, 
 import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, deleteDoc, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 (function() {
-    // --- Constantes et Variables Globales (déclarées mais non initialisées ici pour les éléments DOM) ---
+    // --- Constantes et Variables Globales ---
     const APP_CONTAINER = document.getElementById('app-container'); // Cet élément est généralement disponible tôt
     const TEAM_DATA_KEY = 'volleyTeamsData';
     const BRASSAGE_PHASES_KEY = 'volleyBrassagePhases';
@@ -33,7 +33,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     let currentTournamentData = null; // Données complètes du tournoi sélectionné
     let allUserTournaments = []; // Liste des tournois accessibles à l'utilisateur
 
-    // Déclaration des variables pour les éléments DOM. Elles seront initialisées dans DOMContentLoaded.
+    // Déclaration des variables pour les éléments DOM. Elles seront initialisées DANS DOMContentLoaded.
     let navLinks = {};
     let modal, modalTitle, modalBody, modalConfirmBtn, modalCancelBtn, toastContainer;
     let authInfoDiv, userEmailSpan, logoutBtn, selectTournamentBtn, currentTournamentNameDisplay;
@@ -73,8 +73,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      */
     function showToast(message, type = 'info', duration = 3000) {
         // Vérifier si toastContainer est initialisé avant de l'utiliser
+        // Si non, cela signifie que le DOM n'est pas encore prêt, on log l'erreur.
         if (!toastContainer) {
-            console.error("Toast container not found! Cannot display toast: ", message);
+            console.error("Toast container non trouvé! Impossible d'afficher le toast: ", message);
             return;
         }
 
@@ -119,8 +120,9 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      * @param {boolean} isDestructive Si true, le bouton de confirmation est rouge.
      */
     function showModal(title, content, confirmCallback, isDestructive = false) {
+        // Vérifier si les éléments de la modale sont initialisés
         if (!modal || !modalTitle || !modalBody || !modalConfirmBtn || !modalCancelBtn) {
-            console.error("Modal elements not found! Cannot display modal.");
+            console.error("Éléments de la modale non trouvés! Impossible d'afficher la modale.");
             return;
         }
 
@@ -150,7 +152,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
      */
     function hideModal() {
         if (!modal) {
-            console.error("Modal element not found for hiding!");
+            console.error("Élément de la modale non trouvé pour la cacher!");
             return;
         }
         modal.classList.remove('opacity-100', 'scale-100');
@@ -190,13 +192,12 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
     window.currentTournamentUnsubscribe = null;
     window.allUserTournamentsUnsubscribe = null;
 
-    // Initialize Firebase
+    /**
+     * Initialise Firebase et configure l'écouteur d'état d'authentification.
+     * Cette fonction est appelée UNIQUEMENT après que le DOM soit chargé.
+     */
     function initializeFirebaseAndAuth() {
         try {
-            // Log the raw values to help diagnose if they are empty
-            console.log("DEBUG: __firebase_config:", typeof __firebase_config !== 'undefined' ? __firebase_config : 'undefined');
-            console.log("DEBUG: __app_id:", typeof __app_id !== 'undefined' ? __app_id : 'undefined');
-
             const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
             const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
@@ -245,8 +246,6 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
                     handleLocationHash();
                 }
                 // Notify the main app that Firebase is ready and auth state is known
-                // This callback is now called by initializeFirebaseAndAuth itself
-                // (was previously in DOMContentLoaded, but better here after auth state is determined)
                 if (window.onFirebaseReady) {
                     window.onFirebaseReady();
                 }
@@ -677,6 +676,7 @@ import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, dele
 
         showModal(`Détails de la rencontre répétée`, modalContentDiv, () => hideModal());
     }
+
 
     // --- Fonctions de Gestion des Équipes ---
 
