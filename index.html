@@ -97,13 +97,19 @@
 </head>
 <body class="bg-gray-100 min-h-screen flex flex-col">
     <nav class="bg-blue-600 shadow-lg fixed top-0 left-0 h-screen w-40 z-10 p-1 flex flex-col items-center">
-        <a href="#home" class="mb-8 mt-4">
+        <a href="#home" class="mb-2 mt-4">
             <img src="Images/Logo_EsayPlay.png"
                  alt="Logo EasyPlay"
                  class="h-20 w-auto rounded-md object-cover"
                  onerror="this.onerror=null;this.src='https://placehold.co/100x80/cccccc/333333?text=Logo';"
             >
         </a>
+
+        <div id="auth-cta-container" class="w-full text-center mb-4">
+            <a href="#auth" id="login-signup-btn" class="inline-block bg-blue-700 text-white text-xs py-1 px-2 rounded-md hover:bg-blue-800 transition duration-150">
+                Connexion / Inscription
+            </a>
+        </div>
 
         <div id="auth-info" class="text-white text-sm text-center mb-4 hidden">
             <p id="user-email" class="font-bold"></p>
