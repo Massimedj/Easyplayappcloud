@@ -132,12 +132,12 @@
 
         <!-- Liste de navigation avec icônes -->
         <ul id="main-nav-links" class="flex flex-col space-y-4 w-full flex-grow">
-            <li id="nav-home-li"> <!-- NOUVEL ID AJOUTÉ ICI -->
+            <li id="nav-home-li">
                 <a href="#home" id="nav-home" class="nav-link text-white hover:text-blue-200 transition duration-150 px-3 py-2 rounded-md flex items-center space-x-2">
                     <i class="fas fa-home"></i> <span>Accueil</span>
                 </a>
             </li>
-            <li id="nav-tournaments"> <!-- ID ajouté pour cohérence -->
+            <li id="nav-tournaments">
                 <a href="#tournaments" class="nav-link text-white hover:text-blue-200 transition duration-150 px-3 py-2 rounded-md flex items-center space-x-2">
                     <i class="fas fa-sitemap"></i> <span>Tournois</span>
                 </a>
@@ -230,13 +230,13 @@
 
         // Votre configuration Firebase pour l'application web
         const firebaseConfig = {
-            apiKey: "AIzaSyA1AoHpUpvD12YUzLe91SWNpxmPRPB36aQ",
-            authDomain: "easyplayapp-97e15.firebaseapp.com",
-            projectId: "easyplayapp-97e15",
-            storageBucket: "easyplayapp-97e15.firebasestorage.app",
-            messagingSenderId: "741324257784",
-            appId: "1:741324257784:web:06a85e1f10b8dc804afe0d",
-            measurementId: "G-YPJHRXB1TP"
+            apiKey: "YOUR_API_KEY", // REMPLACEZ PAR VOTRE CLÉ API FIREBASE
+            authDomain: "YOUR_AUTH_DOMAIN", // REMPLACEZ PAR VOTRE DOMAINE AUTH
+            projectId: "YOUR_PROJECT_ID", // REMPLACEZ PAR VOTRE ID DE PROJET
+            storageBucket: "YOUR_STORAGE_BUCKET", // REMPLACEZ PAR VOTRE BUCKET DE STOCKAGE
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID", // REMPLACEZ PAR VOTRE ID D'EXPÉDITEUR
+            appId: "YOUR_APP_ID", // REMPLACEZ PAR VOTRE ID D'APPLICATION
+            measurementId: "YOUR_MEASUREMENT_ID" // REMPLACEZ PAR VOTRE ID DE MESURE
         };
 
         let app;
@@ -247,6 +247,8 @@
         let appId = null;
 
         // Expose Firebase functions globally
+        // Cela permet à script.js d'accéder aux fonctions Firebase sans les importer directement.
+        // C'est une approche simplifiée pour les applications à fichier unique ou peu de fichiers.
         window.initializeApp = initializeApp;
         window.getAuth = getAuth;
         window.getFirestore = getFirestore;
@@ -267,12 +269,14 @@
         window.getDocs = getDocs;
         window.serverTimestamp = serverTimestamp;
 
+        // Fonction d'initialisation de Firebase et d'écouteur d'authentification
         function initializeFirebaseAndAuthInternal() {
             try {
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
 
+                // Rendre les instances globales
                 window.auth = auth;
                 window.db = db;
                 window.appId = firebaseConfig.projectId; // Utilise projectId comme appId pour Firestore
@@ -288,6 +292,7 @@
                         window.userId = null;
                         console.log("Firebase: Utilisateur déconnecté.");
                     }
+                    // Notifier le script principal que Firebase est prêt et que l'état d'auth a changé
                     if (typeof window.onFirebaseReady === 'function') {
                         window.onFirebaseReady(user);
                     }
@@ -295,16 +300,18 @@
 
             } catch (error) {
                 console.error("Firebase: Erreur lors de l'initialisation de Firebase:", error);
+                // En cas d'erreur, s'assurer que les variables globales sont nulles
                 window.db = null;
                 window.auth = null;
                 window.userId = null;
-                window.appId = firebaseConfig.projectId;
+                window.appId = firebaseConfig.projectId; // L'appId peut rester même si DB/Auth échoue
                 if (typeof window.onFirebaseReady === 'function') {
                     window.onFirebaseReady(null);
                 }
             }
         }
 
+        // Exécuter l'initialisation Firebase une fois le DOM chargé
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', initializeFirebaseAndAuthInternal);
         } else {
