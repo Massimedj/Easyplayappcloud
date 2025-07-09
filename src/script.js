@@ -301,7 +301,7 @@
             date: currentTournamentData ? currentTournamentData.date : 'N/A',
             numTeamsAllowed: currentTournamentData ? currentTournamentData.numTeamsAllowed : 0,
             ownerId: window.userId, // L'ID du propriétaire est toujours l'utilisateur actuel
-            createdAt: currentTournamentData && currentTournamentData.createdAt ? currentTournamentData.createdAt : window.serverTimestamp(),
+            createdAt: currentTournamentData && currentTournamentData.createdAt ? currentTournamentData.createdAt : (window.serverTimestamp ? window.serverTimestamp() : Date.now()),
         };
 
         try {
@@ -356,7 +356,7 @@
                 date: date,
                 numTeamsAllowed: numTeams,
                 ownerId: window.userId,
-                createdAt: window.serverTimestamp(),
+                createdAt: window.serverTimestamp ? window.serverTimestamp() : Date.now(),
                 teams: [],
                 brassagePhases: [],
                 eliminationPhases: {},
@@ -630,20 +630,21 @@
      */
     function updateNavLinksVisibility() {
         const currentPath = window.location.hash;
-        // Mettre à jour la classe "active" de la navigation
+        // Mettre à jour la classe "active" de la navigation sur les liens <a>
         document.querySelectorAll('#main-nav-links .nav-link').forEach(link => {
             if (link && link.getAttribute('href') === currentPath) {
-                link.classList.add('bg-blue-700'); // Ou une autre classe pour l'état actif
+                link.classList.add('bg-blue-700'); // Classe pour l'état actif
             } else if (link) {
                 link.classList.remove('bg-blue-700');
             }
         });
-        // Gérer spécifiquement le lien 'Accueil' qui est directement sous 'nav'
-        if (navLinks.home) { // navLinks.home est maintenant le <a> du lien Accueil
-            if (navLinks.home.getAttribute('href') === currentPath) {
-                navLinks.home.classList.add('bg-blue-700');
+        // Gérer spécifiquement le lien 'Accueil' qui est directement sous 'nav' (pas dans #main-nav-links)
+        const homeNavLink = document.getElementById('nav-home');
+        if (homeNavLink) {
+            if (homeNavLink.getAttribute('href') === currentPath) {
+                homeNavLink.classList.add('bg-blue-700');
             } else {
-                navLinks.home.classList.remove('bg-blue-700');
+                homeNavLink.classList.remove('bg-blue-700');
             }
         }
 
@@ -671,11 +672,10 @@
             currentTournamentNameDisplay.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
         }
 
-        // Afficher/masquer les liens de navigation principaux basés sur la connexion et la sélection du tournoi
-        // Note: navLinks.home est le <a> du lien Accueil qui est directement sous nav dans le nouveau HTML.
-        // Les autres sont des <li> qui contiennent les <a>.
-        if (navLinks.home) navLinks.home.parentElement.classList.toggle('hidden', !isLoggedIn && currentPath !== '#auth'); // La li du lien Accueil
-        if (navLinks.tournaments) navLinks.tournaments.classList.toggle('hidden', !isLoggedIn); // La li du lien Tournois
+        // Afficher/masquer les éléments <li> des liens de navigation principaux
+        // navLinks.home est maintenant le <li> du lien Accueil
+        if (navLinks.home) navLinks.home.classList.toggle('hidden', !isLoggedIn && currentPath !== '#auth');
+        if (navLinks.tournaments) navLinks.tournaments.classList.toggle('hidden', !isLoggedIn);
         if (navLinks.equipes) navLinks.equipes.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
         if (navLinks.brassages) navLinks.brassages.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
         if (navLinks.eliminatoires) navLinks.eliminatoires.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
@@ -700,10 +700,10 @@
         selectTournamentBtn = document.getElementById('select-tournament-btn'); // CHANGEMENT D'ID: était selectTournamentBtn
         currentTournamentNameDisplay = document.getElementById('current-tournament-name'); // CHANGEMENT D'ID: était currentTournamentNameDisplay
 
-        // navLinks maintenant cible les LI (pour les cacher/afficher) sauf pour 'home' qui cible le <a>
+        // navLinks maintenant cible les LI (pour les cacher/afficher)
         navLinks = {
-            home: document.getElementById('nav-home'), // NOUVEL ID POUR LIEN ACCUEIL
-            tournaments: document.getElementById('main-nav-links').querySelector('a[href="#tournaments"]').parentElement, // Tournois n'a pas d'ID de LI
+            home: document.getElementById('nav-home-li'), // NOUVEL ID POUR LI DU LIEN ACCUEIL
+            tournaments: document.getElementById('nav-tournaments'), // NOUVEL ID POUR LI DU LIEN TOURNOIS
             equipes: document.getElementById('nav-equipes'), // Cible la LI
             brassages: document.getElementById('nav-brassages'), // Cible la LI
             eliminatoires: document.getElementById('nav-eliminatoires'), // Cible la LI
@@ -719,8 +719,6 @@
 
         // 3. Pas de gestion de scroll pour la barre de navigation verticale fixe
         // La barre nav est fixe et ne change pas d'apparence au scroll.
-        // const navBar = document.querySelector('nav');
-        // if (navBar) { /*... code de gestion du scroll ...*/ }
 
         // 4. Firebase est initialisé dans le script inline de index.html.
         // On attend que window.onFirebaseReady soit appelé par ce script.
@@ -770,7 +768,35 @@
         }
     });
 
-     // Exposer les fonctions de rendu et de logique des pages (Partie 5 et autres)
+    // Rendre les fonctions globales nécessaires pour être appelées depuis d'autres parties du code
+    // ou directement par le HTML (via les gestionnaires d'événements JavaScript générés).
+    window.showToast = showToast;
+    window.showModal = showModal;
+    window.hideModal = hideModal;
+    window.currentTournamentId = currentTournamentId;
+    window.allTeams = allTeams;
+    window.allBrassagePhases = allBrassagePhases;
+    window.eliminationPhases = eliminationPhases;
+    window.currentSecondaryGroupsPreview = currentSecondaryGroupsPreview;
+    window.eliminatedTeams = eliminatedTeams;
+    window.currentDisplayedPhaseId = currentDisplayedPhaseId;
+    window.currentTournamentData = currentTournamentData;
+    window.allUserTournaments = allUserTournaments;
+
+    window.saveAllData = saveAllData;
+    window.loadAllData = loadAllData;
+    window.createNewTournament = createNewTournament;
+    window.selectTournament = selectTournament;
+    window.deleteTournament = deleteTournament;
+    window.teamExists = teamExists;
+    window.isMatchRepeated = isMatchRepeated;
+    window.updateRepeatedMatchesCountDisplay = updateRepeatedMatchesCountDisplay;
+    window.showRepeatedMatchDetailsModal = showRepeatedMatchDetailsModal;
+    window.updateNavLinksVisibility = updateNavLinksVisibility;
+    window.updateTournamentDisplay = updateTournamentDisplay;
+    window.handleLocationHash = handleLocationHash;
+
+    // Exposer les fonctions de rendu et de logique des pages (Partie 5 et autres)
     window.renderHomePage = renderHomePage;
     window.setupAuthPageLogic = setupAuthPageLogic;
     window.renderEquipesPage = renderEquipesPage;
@@ -804,7 +830,9 @@
     window.validateForDirectElimination = validateForDirectElimination;
     window.generateSecondaryBrassagePhases = generateSecondaryBrassagePhases;
     window.clearAllPhases = clearAllPhases;
+
 })();
+
     // --- Fonctions de Gestion des Équipes ---
 
     /**
