@@ -951,7 +951,7 @@
     /**
      * Met à jour l'affichage du nom du tournoi actif dans la barre de navigation.
      */
-    function updateTournamentDisplay() {
+ function updateTournamentDisplay() {
         if (currentTournamentData && currentTournamentId) {
             let nameDisplay = escapeHtml(currentTournamentData.name);
             if (isGuestMode) {
@@ -969,21 +969,26 @@
      * Met à jour la visibilité des liens de navigation en fonction de l'état d'authentification
      * et de la sélection d'un tournoi.
      */
-    function updateNavLinksVisibility() {
+       function updateNavLinksVisibility() {
         const isLoggedIn = !!window.userId;
-        const tournamentSelected = !!currentTournamentId; // In guest mode, currentTournamentId is 'guest_mode_tournament'
+        const tournamentSelected = !!currentTournamentId;
+        // NEW: Get the reference to the new login/signup button container
+        const authCtaContainer = document.getElementById('auth-cta-container');
 
-        // Auth info always hidden in guest mode
-        authInfoDiv.classList.toggle('hidden', isGuestMode || !isLoggedIn);
-        userEmailSpan.textContent = (isLoggedIn && window.auth.currentUser) ? window.auth.currentUser.email : '';
+        // Auth info (user email, logout, change tournament)
+        authInfoDiv.classList.toggle('hidden', !isLoggedIn); // Hidden if not logged in
 
-        // Nav links visibility
-        // Home is always visible, but check if the element actually exists
-        if (navLinks.home) { // <-- AJOUTÉE : Cette vérification pour éviter l'erreur si l'élément n'est pas là
-            navLinks.home.classList.remove('hidden');
+        // NEW: Login/Signup CTA button
+        if (authCtaContainer) { // Ensure the element exists before trying to access its classList
+            authCtaContainer.classList.toggle('hidden', isLoggedIn); // Hidden if logged in
         }
 
-        // Other links depend on whether a tournament is selected (or in guest mode)
+        userEmailSpan.textContent = (isLoggedIn && window.auth.currentUser) ? window.auth.currentUser.email : '';
+
+        // Nav links visibility (unchanged from previous version)
+        if (navLinks.home) {
+            navLinks.home.classList.remove('hidden');
+        }
         if (navLinks.equipes) navLinks.equipes.classList.toggle('hidden', !tournamentSelected);
         if (navLinks.brassages) navLinks.brassages.classList.toggle('hidden', !tournamentSelected);
         if (navLinks.eliminatoires) navLinks.eliminatoires.classList.toggle('hidden', !tournamentSelected);
@@ -992,9 +997,9 @@
         // Collaborators link only visible for logged-in owners
         if (navLinks.collaborators) navLinks.collaborators.classList.toggle('hidden', !(isLoggedIn && tournamentSelected && currentTournamentData?.ownerId === window.userId));
 
-        // Logout/Select Tournament buttons
-        selectTournamentBtn.classList.toggle('hidden', isGuestMode || !isLoggedIn);
-        logoutBtn.classList.toggle('hidden', isGuestMode || !isLoggedIn);
+        // Logout/Select Tournament buttons (part of authInfoDiv, but explicit toggle for clarity if ever separated)
+        selectTournamentBtn.classList.toggle('hidden', !isLoggedIn);
+        logoutBtn.classList.toggle('hidden', !isLoggedIn);
 
         // Mise à jour de la classe "active" de la navigation pour tous les liens
         document.querySelectorAll('.nav-link').forEach(link => {
@@ -1007,6 +1012,7 @@
             }
         });
     }
+	
 	// Part 2 sur 5 (script.js) - Corrigée
 
     /**
