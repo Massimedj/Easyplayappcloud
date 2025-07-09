@@ -27,7 +27,7 @@
 
     // Variables pour la gestion des tournois et de l'utilisateur
     let currentTournamentId = null; // ID du tournoi actuellement sélectionné/actif
-    let currentTournamentData = null; // Données complètes du tournoi actif (pour ownerId, collaborators)
+    let currentTournamentData = null; // Données complètes du tournoi actif (pour ownerId)
     let allUserTournaments = []; // Liste des tournois auxquels l'utilisateur a accès
 
     // Map pour suivre les occurrences de matchs dans les différentes phases
@@ -52,8 +52,8 @@
         equipes: document.getElementById('nav-equipes'),
         brassages: document.getElementById('nav-brassages'),
         eliminatoires: document.getElementById('nav-eliminatoires'),
-        classements: document.getElementById('nav-classements'),
-        collaborators: document.getElementById('nav-collaborators')
+        classements: document.getElementById('nav-classements')
+        // nav-collaborators a été supprimé de index.html
     };
 
     // --- Fonctions Utilitaires ---
@@ -246,9 +246,8 @@
                 date: currentTournamentData.date,
                 numTeamsAllowed: currentTournamentData.numTeamsAllowed,
                 ownerId: currentTournamentData.ownerId,
-                collaboratorIds: currentTournamentData.collaboratorIds || [], // Assurez-vous que c'est un tableau
-                collaboratorEmails: currentTournamentData.collaboratorEmails || [], // Assurez-vous que c'est un tableau
-
+                // collaboratorIds et collaboratorEmails sont supprimés car la collaboration explicite est désactivée
+                
                 // Données spécifiques au tournoi
                 allTeams: allTeams,
                 allBrassagePhases: allBrassagePhases,
@@ -377,7 +376,8 @@
     }
 
     /**
-     * Récupère la liste de tous les tournois de l'utilisateur (propriétaire ou collaborateur).
+     * Récupère la liste de tous les tournois de l'utilisateur (propriétaire).
+     * La notion de 'collaboratorIds' est retirée pour cette version simplifiée.
      */
     async function fetchUserTournamentsList() {
         if (!window.userId || !window.db) {
@@ -388,23 +388,12 @@
 
         try {
             const tournamentsCollectionRef = window.collection(window.db, 'tournaments');
+            // Seuls les tournois dont l'utilisateur est propriétaire sont affichés
             const ownerQuery = window.query(tournamentsCollectionRef, window.where('ownerId', '==', window.userId));
-            const collaboratorQuery = window.query(tournamentsCollectionRef, window.where('collaboratorIds', 'array-contains', window.userId));
+            
+            const ownerSnapshot = await window.getDocs(ownerQuery);
 
-            const [ownerSnapshot, collaboratorSnapshot] = await Promise.all([
-                window.getDocs(ownerQuery),
-                window.getDocs(collaboratorQuery)
-            ]);
-
-            const ownerTournaments = ownerSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            const collaboratorTournaments = collaboratorSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-            // Fusionner et dédupliquer les tournois
-            const allTournamentsMap = new Map();
-            ownerTournaments.forEach(t => allTournamentsMap.set(t.id, t));
-            collaboratorTournaments.forEach(t => allTournamentsMap.set(t.id, t));
-
-            allUserTournaments = Array.from(allTournamentsMap.values());
+            allUserTournaments = ownerSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             console.log("Liste des tournois de l'utilisateur mise à jour:", allUserTournaments.length);
 
             // Si l'utilisateur n'a pas de tournoi actif mais en a dans sa liste, on peut en sélectionner un par défaut
@@ -480,8 +469,7 @@
                 date: date,
                 numTeamsAllowed: numTeams,
                 ownerId: window.userId,
-                collaboratorIds: [], // Initialement vide
-                collaboratorEmails: [], // Pour affichage/gestion, pas pour les règles de sécurité
+                // collaboratorIds et collaboratorEmails sont supprimés
                 createdAt: window.serverTimestamp ? window.serverTimestamp() : Date.now(), // Utiliser serverTimestamp si disponible
                 // Initialiser les données du tournoi avec des valeurs vides
                 allTeams: [],
@@ -561,217 +549,8 @@
         }
     }
 
-    /**
-     * Ajoute un collaborateur à un tournoi par son UID.
-     * Cette fonction est celle qui respecte les règles de sécurité Firestore.
-     * @param {string} tournamentId L'ID du tournoi.
-     * @param {string} collaboratorUid L'UID du collaborateur à ajouter.
-     */
-    async function addCollaboratorByUid(tournamentId, collaboratorUid) {
-        if (!window.userId) {
-            showToast("Vous devez être connecté pour ajouter un collaborateur.", "error");
-            return;
-        }
-
-        const tournamentRef = getTournamentDataRef(tournamentId);
-        if (!tournamentRef) {
-            showToast("Erreur: Impossible d'ajouter un collaborateur, référence au tournoi non valide.", "error");
-            return;
-        }
-
-        try {
-            const docSnap = await window.getDoc(tournamentRef);
-            if (!docSnap.exists()) {
-                showToast("Le tournoi n'existe pas.", "error");
-                return;
-            }
-
-            const data = docSnap.data();
-            if (data.ownerId !== window.userId) {
-                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas ajouter de collaborateurs.", "error");
-                return;
-            }
-
-            let currentCollaboratorIds = data.collaboratorIds || [];
-            if (currentCollaboratorIds.includes(collaboratorUid)) {
-                showToast("Cet UID est déjà un collaborateur.", "info");
-                return;
-            }
-
-            currentCollaboratorIds.push(collaboratorUid);
-            await window.updateDoc(tournamentRef, {
-                collaboratorIds: currentCollaboratorIds
-            });
-            showToast(`Collaborateur (UID: ${collaboratorUid}) ajouté avec succès !`, "success");
-            // Le rendu sera mis à jour par le listener du tournoi
-        } catch (error) {
-            console.error("Erreur lors de l'ajout du collaborateur par UID:", error);
-            showToast("Erreur lors de l'ajout du collaborateur.", "error");
-        }
-    }
-
-    /**
-     * Ajoute un collaborateur à un tournoi par son email (pour affichage/gestion, pas pour sécurité directe).
-     * @param {string} tournamentId L'ID du tournoi.
-     * @param {string} collaboratorEmail L'email du collaborateur à ajouter.
-     */
-    async function addCollaboratorByEmailForDisplay(tournamentId, collaboratorEmail) {
-        if (!window.userId) {
-            showToast("Vous devez être connecté pour ajouter un collaborateur.", "error");
-            return;
-        }
-        if (!collaboratorEmail.trim()) {
-            showToast("L'adresse e-mail ne peut pas être vide.", "error");
-            return;
-        }
-
-        const tournamentRef = getTournamentDataRef(tournamentId);
-        if (!tournamentRef) {
-            showToast("Erreur: Impossible d'ajouter un collaborateur, référence au tournoi non valide.", "error");
-            return;
-        }
-
-        try {
-            const docSnap = await window.getDoc(tournamentRef);
-            if (!docSnap.exists()) {
-                showToast("Le tournoi n'existe pas.", "error");
-                return;
-            }
-
-            const data = docSnap.data();
-            if (data.ownerId !== window.userId) {
-                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas ajouter de collaborateurs.", "error");
-                return;
-            }
-
-            let currentCollaboratorEmails = data.collaboratorEmails || [];
-            if (currentCollaboratorEmails.includes(collaboratorEmail.trim())) {
-                showToast("Cette adresse e-mail est déjà dans la liste des collaborateurs.", "info");
-                return;
-            }
-            if (data.ownerId === window.userId && window.auth.currentUser.email === collaboratorEmail.trim()) {
-                 showToast("Vous êtes déjà le propriétaire de ce tournoi.", "info");
-                 return;
-            }
-
-            currentCollaboratorEmails.push(collaboratorEmail.trim());
-            await window.updateDoc(tournamentRef, {
-                collaboratorEmails: currentCollaboratorEmails
-            });
-            showToast(`Adresse e-mail "${escapeHtml(collaboratorEmail)}" ajoutée à la liste des collaborateurs.`, "success");
-            showToast("Rappel: Pour un accès réel, l'UID de cet utilisateur doit être ajouté aux règles de sécurité via une fonction backend.", "info", 5000);
-            // Le rendu sera mis à jour par le listener du tournoi
-        } catch (error) {
-            console.error("Erreur lors de l'ajout du collaborateur par email:", error);
-            showToast("Erreur lors de l'ajout du collaborateur par email.", "error");
-        }
-    }
-
-    /**
-     * Supprime un collaborateur d'un tournoi par son UID.
-     * @param {string} tournamentId L'ID du tournoi.
-     * @param {string} collaboratorUid L'UID du collaborateur à supprimer.
-     */
-    async function removeCollaboratorByUid(tournamentId, collaboratorUid) {
-        if (!window.userId) {
-            showToast("Vous devez être connecté pour gérer les collaborateurs.", "error");
-            return;
-        }
-
-        const tournamentRef = getTournamentDataRef(tournamentId);
-        if (!tournamentRef) {
-            showToast("Erreur: Impossible de supprimer le collaborateur, référence au tournoi non valide.", "error");
-            return;
-        }
-
-        try {
-            const docSnap = await window.getDoc(tournamentRef);
-            if (!docSnap.exists()) {
-                showToast("Le tournoi n'existe pas.", "error");
-                return;
-            }
-
-            const data = docSnap.data();
-            if (data.ownerId !== window.userId) {
-                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas supprimer de collaborateurs.", "error");
-                return;
-            }
-            if (collaboratorUid === window.userId) {
-                showToast("Vous ne pouvez pas vous retirer vous-même en tant que propriétaire.", "error");
-                return;
-            }
-
-            let currentCollaboratorIds = data.collaboratorIds || [];
-            const updatedCollaboratorIds = currentCollaboratorIds.filter(uid => uid !== collaboratorUid);
-
-            if (updatedCollaboratorIds.length === currentCollaboratorIds.length) {
-                showToast("Cet UID n'est pas un collaborateur de ce tournoi.", "info");
-                return;
-            }
-
-            await window.updateDoc(tournamentRef, {
-                collaboratorIds: updatedCollaboratorIds
-            });
-            showToast(`Collaborateur (UID: ${collaboratorUid}) supprimé.`, "success");
-            // Le rendu sera mis à jour par le listener du tournoi
-        } catch (error) {
-            console.error("Erreur lors de la suppression du collaborateur par UID:", error);
-            showToast("Erreur lors de la suppression du collaborateur.", "error");
-        }
-    }
-
-    /**
-     * Supprime un collaborateur d'un tournoi par son email (pour affichage/gestion).
-     * @param {string} tournamentId L'ID du tournoi.
-     * @param {string} collaboratorEmail L'email du collaborateur à supprimer.
-     */
-    async function removeCollaboratorByEmailForDisplay(tournamentId, collaboratorEmail) {
-        if (!window.userId) {
-            showToast("Vous devez être connecté pour gérer les collaborateurs.", "error");
-            return;
-        }
-
-        const tournamentRef = getTournamentDataRef(tournamentId);
-        if (!tournamentRef) {
-            showToast("Erreur: Impossible de supprimer le collaborateur, référence au tournoi non valide.", "error");
-            return;
-        }
-
-        try {
-            const docSnap = await window.getDoc(tournamentRef);
-            if (!docSnap.exists()) {
-                showToast("Le tournoi n'existe pas.", "error");
-                return;
-            }
-
-            const data = docSnap.data();
-            if (data.ownerId !== window.userId) {
-                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas supprimer de collaborateurs.", "error");
-                return;
-            }
-            if (data.ownerId === window.userId && window.auth.currentUser.email === collaboratorEmail.trim()) {
-                 showToast("Vous êtes le propriétaire, vous ne pouvez pas vous retirer de la liste des collaborateurs.", "error");
-                 return;
-            }
-
-            let currentCollaboratorEmails = data.collaboratorEmails || [];
-            const updatedCollaboratorEmails = currentCollaboratorEmails.filter(email => email !== collaboratorEmail.trim());
-
-            if (updatedCollaboratorEmails.length === currentCollaboratorEmails.length) {
-                showToast("Cette adresse e-mail n'est pas dans la liste des collaborateurs.", "info");
-                return;
-            }
-
-            await window.updateDoc(tournamentRef, {
-                collaboratorEmails: updatedCollaboratorEmails
-            });
-            showToast(`Adresse e-mail "${escapeHtml(collaboratorEmail)}" supprimée de la liste.`, "success");
-            // Le rendu sera mis à jour par le listener du tournoi
-        } catch (error) {
-            console.error("Erreur lors de la suppression du collaborateur par email:", error);
-            showToast("Erreur lors de la suppression du collaborateur.", "error");
-        }
-    }
+    // Fonctions addCollaboratorByUid, addCollaboratorByEmailForDisplay,
+    // removeCollaboratorByUid, removeCollaboratorByEmailForDisplay sont supprimées.
 
     /**
      * Met à jour l'affichage du nom du tournoi actif dans la barre de navigation.
@@ -802,7 +581,7 @@
         navLinks.brassages.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
         navLinks.eliminatoires.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
         navLinks.classements.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
-        navLinks.collaborators.classList.toggle('hidden', !(isLoggedIn && tournamentSelected && currentTournamentData?.ownerId === window.userId)); // Collaborateurs visible seulement pour le propriétaire
+        // navLinks.collaborators a été supprimé
     }
 
     /**
@@ -1829,7 +1608,7 @@
             await saveAllData(); // Save cleared preview
 
             // Remove only existing elimination seeding phases to avoid duplicates if re-validating
-            allBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING);
+            allBrassagePhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING);
 
             const eliminationSeedingPhase = {
                 id: `${PHASE_TYPE_ELIMINATION_SEEDING}_${Date.now()}_direct`,
@@ -3062,12 +2841,6 @@
                     listItem.dataset.teamName = team.name;
                     listItem.dataset.totalPoints = team.totalPoints;
                     listItem.dataset.totalDiffScore = team.totalDiffScore;
-
-                    // Display updated scores and elimination status
-                    listItem.innerHTML = `
-                        <span class="${isEliminated ? 'line-through' : ''}">${escapeHtml(team.name)} (Pts: ${team.totalPoints}, Diff: ${team.totalDiffScore})</span>
-                        ${isEliminated ? '<span class="ml-2 text-red-500 text-sm">(Éliminée)</span>' : ''}
-                    `;
 
                     // MODIFIÉ : Appel d'une nouvelle fonction pour gérer les options de l'équipe
                     listItem.addEventListener('click', (event) => {
@@ -4388,17 +4161,15 @@
                 const tourneyDiv = document.createElement('div');
                 tourneyDiv.className = `flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 bg-white border rounded-md shadow-sm ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'}`;
                 
-                let collaboratorEmailsHtml = '';
-                if (tournament.collaboratorEmails && tournament.collaboratorEmails.length > 0) {
-                    collaboratorEmailsHtml = `<p class="text-xs text-gray-600 mt-1">Collaborateurs: ${tournament.collaboratorEmails.map(email => escapeHtml(email)).join(', ')}</p>`;
-                }
+                // In the simplified model, collaboratorEmails is not used for access, so we remove its display
+                // The ownerEmail field is also not strictly necessary for display if all users share one account.
+                // However, keeping ownerId check is important for delete permissions.
 
                 tourneyDiv.innerHTML = `
                     <div class="flex-grow">
                         <p class="text-lg font-medium text-gray-800">${escapeHtml(tournament.name)} ${isSelected ? '<span class="text-blue-600 text-sm ml-2">(Actif)</span>' : ''}</p>
                         <p class="text-sm text-gray-600">Date: ${escapeHtml(tournament.date)} | Équipes prévues: ${escapeHtml(tournament.numTeamsAllowed.toString())}</p>
-                        <p class="text-sm text-gray-600">Propriétaire: ${isOwner ? 'Moi' : (tournament.ownerEmail ? escapeHtml(tournament.ownerEmail) : 'Inconnu')}</p>
-                        ${collaboratorEmailsHtml}
+                        <p class="text-sm text-gray-600">Propriétaire: ${isOwner ? 'Moi' : 'Autre (ID: ' + escapeHtml(tournament.ownerId) + ')'}</p>
                     </div>
                     <div class="flex space-x-2 mt-3 sm:mt-0">
                         <button data-id="${tournament.id}" class="select-tournament-btn bg-blue-500 text-white px-3 py-1 rounded-md hover:bg-blue-600 text-sm transition duration-150 ${isSelected ? 'opacity-50 cursor-not-allowed' : ''}" ${isSelected ? 'disabled' : ''}>
@@ -4432,184 +4203,8 @@
         renderTournamentsList();
     }
 
-    /**
-     * Affiche la page de gestion des collaborateurs.
-     */
-    function renderCollaboratorsPage() {
-        if (!currentTournamentData || currentTournamentData.ownerId !== window.userId) {
-            APP_CONTAINER.innerHTML = `
-                <div class="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10 text-center">
-                    <h1 class="text-2xl font-bold text-gray-800 mb-4">Accès Refusé</h1>
-                    <p class="text-gray-700">Vous devez être le propriétaire du tournoi pour gérer les collaborateurs.</p>
-                    <button onclick="window.location.hash='#home'" class="mt-4 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">Retour à l'accueil</button>
-                </div>
-            `;
-            return;
-        }
-
-        APP_CONTAINER.innerHTML = `
-            <div class="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
-                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Gérer les Collaborateurs du Tournoi</h1>
-                <p class="text-center text-gray-600 mb-6">
-                    Tournoi actuel : <span class="font-semibold">${escapeHtml(currentTournamentData.name)}</span>
-                </p>
-
-                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter un Collaborateur par UID</h2>
-                    <p class="text-gray-600 mb-4">
-                        Pour ajouter un collaborateur avec un accès réel au tournoi (selon les règles de sécurité Firestore),
-                        vous devez connaître son UID Firebase.
-                    </p>
-                    <div class="flex flex-col sm:flex-row gap-4 items-end">
-                        <div class="flex-grow">
-                            <label for="collaboratorUidInput" class="block text-sm font-medium text-gray-700 mb-1">UID du Collaborateur</label>
-                            <input type="text" id="collaboratorUidInput" placeholder="Entrez l'UID Firebase du collaborateur"
-                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
-                        </div>
-                        <button id="addCollaboratorUidBtn"
-                                class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                            Ajouter par UID
-                        </button>
-                    </div>
-                </section>
-
-                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter un Collaborateur par Email (pour affichage)</h2>
-                    <p class="text-gray-600 mb-4">
-                        Vous pouvez ajouter des adresses e-mail pour suivre les collaborateurs, mais cela ne leur donne
-                        **pas d'accès automatique** au tournoi via les règles de sécurité Firestore. Pour un accès réel,
-                        une fonction Cloud Firebase est nécessaire pour convertir l'email en UID et mettre à jour les règles.
-                    </p>
-                    <div class="flex flex-col sm:flex-row gap-4 items-end">
-                        <div class="flex-grow">
-                            <label for="collaboratorEmailInput" class="block text-sm font-medium text-gray-700 mb-1">Email du Collaborateur</label>
-                            <input type="email" id="collaboratorEmailInput" placeholder="collaborateur@example.com"
-                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
-                        </div>
-                        <button id="addCollaboratorEmailBtn"
-                                class="bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                            Ajouter par Email
-                        </button>
-                    </div>
-                </section>
-
-                <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Collaborateurs Actuels</h2>
-                    <div id="currentCollaboratorsList" class="space-y-3">
-                        <p class="text-gray-500 text-center">Aucun collaborateur pour ce tournoi.</p>
-                    </div>
-                </section>
-            </div>
-        `;
-        setupCollaboratorsPageLogic();
-    }
-
-    /**
-     * Logique de la page de gestion des collaborateurs.
-     */
-    function setupCollaboratorsPageLogic() {
-        const collaboratorUidInput = document.getElementById('collaboratorUidInput');
-        const addCollaboratorUidBtn = document.getElementById('addCollaboratorUidBtn');
-        const collaboratorEmailInput = document.getElementById('collaboratorEmailInput');
-        const addCollaboratorEmailBtn = document.getElementById('addCollaboratorEmailBtn');
-        const currentCollaboratorsList = document.getElementById('currentCollaboratorsList');
-
-        function renderCollaborators() {
-            currentCollaboratorsList.innerHTML = '';
-            const collaborators = [];
-
-            // Add owner
-            if (currentTournamentData && currentTournamentData.ownerId) {
-                collaborators.push({
-                    type: 'owner',
-                    id: currentTournamentData.ownerId,
-                    display: `${window.auth.currentUser.email} (Moi - Propriétaire)`
-                });
-            }
-
-            // Add collaborators by UID
-            if (currentTournamentData && currentTournamentData.collaboratorIds) {
-                currentTournamentData.collaboratorIds.forEach(uid => {
-                    if (uid !== window.userId && uid !== currentTournamentData.ownerId) { // Exclure le propriétaire et l'utilisateur actuel s'il est déjà propriétaire
-                        collaborators.push({
-                            type: 'uid',
-                            id: uid,
-                            display: `UID: ${escapeHtml(uid)} (Accès réel)`
-                        });
-                    }
-                });
-            }
-
-            // Add collaborators by email (for display only)
-            if (currentTournamentData && currentTournamentData.collaboratorEmails) {
-                currentTournamentData.collaboratorEmails.forEach(email => {
-                    // Avoid duplicating if email corresponds to current user (owner)
-                    if (email !== window.auth.currentUser.email) {
-                        collaborators.push({
-                            type: 'email',
-                            id: email, // Use email as ID for display purposes
-                            display: `Email: ${escapeHtml(email)} (Pour info)`
-                        });
-                    }
-                });
-            }
-
-            if (collaborators.length === 0) {
-                currentCollaboratorsList.innerHTML = '<p class="text-gray-500 text-center">Aucun collaborateur pour ce tournoi.</p>';
-                return;
-            }
-
-            collaborators.forEach(collab => {
-                const collabDiv = document.createElement('div');
-                collabDiv.className = 'flex items-center justify-between p-3 bg-white border border-gray-200 rounded-md shadow-sm';
-                collabDiv.innerHTML = `
-                    <span class="text-gray-800 font-medium flex-grow">${collab.display}</span>
-                    <div class="flex space-x-2 ml-4">
-                        ${collab.type !== 'owner' ? `
-                            <button data-id="${collab.id}" data-type="${collab.type}" class="remove-collaborator-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition duration-150">
-                                Supprimer
-                            </button>
-                        ` : ''}
-                    </div>
-                `;
-                currentCollaboratorsList.appendChild(collabDiv);
-            });
-
-            document.querySelectorAll('.remove-collaborator-btn').forEach(button => {
-                button.addEventListener('click', (event) => {
-                    const collabId = event.target.dataset.id;
-                    const collabType = event.target.dataset.type;
-                    const messageContent = document.createElement('p');
-                    messageContent.textContent = `Êtes-vous sûr de vouloir supprimer ce collaborateur (${escapeHtml(collabId)}) ?`;
-                    messageContent.className = 'text-gray-700';
-
-                    showModal('Confirmer la suppression du collaborateur', messageContent, () => {
-                        if (collabType === 'uid') {
-                            removeCollaboratorByUid(currentTournamentId, collabId);
-                        } else if (collabType === 'email') {
-                            removeCollaboratorByEmailForDisplay(currentTournamentId, collabId);
-                        }
-                    }, true);
-                });
-            });
-        }
-
-        addCollaboratorUidBtn.addEventListener('click', () => {
-            const uid = collaboratorUidInput.value.trim();
-            addCollaboratorByUid(currentTournamentId, uid);
-            collaboratorUidInput.value = '';
-        });
-
-        addCollaboratorEmailBtn.addEventListener('click', () => {
-            const email = collaboratorEmailInput.value.trim();
-            addCollaboratorByEmailForDisplay(currentTournamentId, email);
-            collaboratorEmailInput.value = '';
-        });
-
-        // Initial render and re-render on tournament data change
-        // This is handled by the onSnapshot listener for currentTournamentData
-        renderCollaborators();
-    }
+    // La page des collaborateurs est supprimée dans ce modèle simplifié.
+    // Les fonctions renderCollaboratorsPage et setupCollaboratorsPageLogic ne sont plus nécessaires.
 
 
     // --- Routage et Initialisation ---
@@ -4650,14 +4245,8 @@
             return;
         }
 
-        // Si un tournoi est sélectionné, et l'utilisateur est propriétaire, vérifier l'accès à la page des collaborateurs
-        if (path === 'collaborators' && currentTournamentData?.ownerId !== window.userId) {
-            showToast("Vous n'êtes pas le propriétaire de ce tournoi pour gérer les collaborateurs.", "error");
-            window.location.hash = '#home'; // Rediriger vers l'accueil
-            renderHomePage();
-            return;
-        }
-
+        // Dans le modèle simplifié, la page des collaborateurs n'existe plus.
+        // On ne vérifie plus l'accès à cette page spécifique.
 
         switch (path) {
             case 'home':
@@ -4681,9 +4270,6 @@
             case 'tournaments': // Nouvelle route pour le tableau de bord des tournois
                 renderTournamentDashboard();
                 break;
-            case 'collaborators': // Nouvelle route pour la gestion des collaborateurs
-                renderCollaboratorsPage();
-                break;
             case 'auth': // Si déjà connecté, rediriger vers le tableau de bord des tournois
                 window.location.hash = '#tournaments';
                 renderTournamentDashboard();
@@ -4694,6 +4280,26 @@
                 window.location.hash = '#tournaments';
                 renderTournamentDashboard();
         }
+    }
+
+    /**
+     * Met à jour la visibilité des liens de navigation en fonction de l'état d'authentification
+     * et de la sélection d'un tournoi.
+     */
+    function updateNavLinksVisibility() {
+        const isLoggedIn = !!window.userId;
+        const tournamentSelected = !!currentTournamentId;
+
+        authInfoDiv.classList.toggle('hidden', !isLoggedIn);
+        userEmailSpan.textContent = window.auth.currentUser ? window.auth.currentUser.email : '';
+
+        // Afficher/masquer les liens de navigation principaux
+        navLinks.equipes.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.brassages.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.eliminatoires.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.classements.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        // Le lien des collaborateurs est maintenant toujours caché ou supprimé de l'HTML
+        navLinks.collaborators.classList.add('hidden');
     }
 
     // --- Initialisation de l'Application ---
@@ -4753,7 +4359,7 @@
                 currentTournamentId = null;
                 currentTournamentData = null;
                 allTeams = [];
-                allBrassagePhases = [];
+                allBrassagePhases = {}; // Changed to object
                 eliminationPhases = {};
                 currentSecondaryGroupsPreview = {};
                 eliminatedTeams = new Set();
