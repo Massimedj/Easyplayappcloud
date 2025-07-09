@@ -1,5 +1,6 @@
 (function() {
     // --- Constantes et Variables Globales ---
+	
     const APP_CONTAINER = document.getElementById('app-container');
 
     // Les clés de localStorage sont conservées comme constantes, mais ne sont plus utilisées pour la persistance.
