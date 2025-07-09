@@ -1,29 +1,22 @@
-// Les imports Firebase sont supprimés ici car ils sont maintenant gérés dans index.html
-// import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-// import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-// import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, addDoc, deleteDoc, updateDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
 (function() {
-    // --- Constantes Globales ---
+    // --- Constantes et Variables Globales ---
     const APP_CONTAINER = document.getElementById('app-container');
-    // Clés pour localStorage (utilisées en mode simulation)
-    const TEAM_DATA_KEY = 'volleyTeamsData';
-    const BRASSAGE_PHASES_KEY = 'volleyBrassagePhases';
-    const ELIMINATION_PHASES_KEY = 'volleyEliminationPhases';
-    const SECONDARY_GROUPS_SELECTION_KEY = 'volleySecondaryGroupsSelection';
-    const POOL_GENERATION_BASIS_KEY = 'volleyPoolGenerationBasis';
-    const SECONDARY_GROUPS_PREVIEW_KEY = 'volleySecondaryGroupsPreview';
-    const ELIMINATED_TEAMS_KEY = 'volleyEliminatedTeams';
-    const CURRENT_TOURNAMENT_ID_KEY = 'currentTournamentId'; // Pour persister l'ID du tournoi sélectionné
 
-    const MAX_SIMULATION_TEAMS = 9; // Limite pour le mode simulation
+    // Les clés de localStorage sont conservées comme constantes, mais ne sont plus utilisées pour la persistance.
+    // La persistance est maintenant gérée par Firestore.
+    const TEAM_DATA_KEY = 'volleyTeamsData'; // Non utilisé pour Firestore
+    const BRASSAGE_PHASES_KEY = 'volleyBrassagePhases'; // Non utilisé pour Firestore
+    const ELIMINATION_PHASES_KEY = 'volleyEliminationPhases'; // Non utilisé pour Firestore
+    const SECONDARY_GROUPS_SELECTION_KEY = 'volleySecondaryGroupsSelection'; // Non utilisé pour Firestore
+    const POOL_GENERATION_BASIS_KEY = 'volleyPoolGenerationBasis'; // Non utilisé pour Firestore
+    const SECONDARY_GROUPS_PREVIEW_KEY = 'volleySecondaryGroupsPreview'; // Non utilisé pour Firestore
+    const ELIMINATED_TEAMS_KEY = 'volleyEliminatedTeams'; // Non utilisé pour Firestore
 
     const PHASE_TYPE_INITIAL = 'initial_brassage';
     const PHASE_TYPE_SECONDARY_BRASSAGE = 'secondary_brassage';
-    const PHASE_TYPE_ELIMINATION_SEEDING = 'elimination_seeding';
+    const PHASE_TYPE_ELIMINATION_SEEDING = 'elimination_seeding'; // Phase spéciale pour le regroupement éliminatoire
 
-    // --- Variables Globales (état de l'application) ---
-    // Ces variables contiendront les données du tournoi ACTIF, qu'elles viennent de localStorage ou Firestore
+    // Données du tournoi (chargées du tournoi actif)
     let allTeams = [];
     let allBrassagePhases = [];
     let eliminationPhases = {};
@@ -32,35 +25,161 @@
 
     let currentDisplayedPhaseId = null; // ID de la phase de brassage actuellement affichée
 
-    // Variables pour la gestion des tournois (Firestore)
-    let currentTournamentId = null;
-    let currentTournamentData = null; // Contient toutes les données du tournoi Firestore (y compris teams, phases, etc.)
-    let allUserTournaments = []; // Liste des métadonnées de tous les tournois de l'utilisateur
+    // Variables pour la gestion des tournois et de l'utilisateur
+    let currentTournamentId = null; // ID du tournoi actuellement sélectionné/actif
+    let currentTournamentData = null; // Données complètes du tournoi actif (pour ownerId, collaborators)
+    let allUserTournaments = []; // Liste des tournois auxquels l'utilisateur a accès
 
     // Map pour suivre les occurrences de matchs dans les différentes phases
+    // Clé: chaîne canonique représentant la paire d'équipes (ex: "team1_id-team2_id" triée)
+    // Valeur: Set d'IDs de phases où cette paire a joué
     let matchOccurrenceMap = new Map();
 
-    // Déclaration des variables pour les éléments DOM. Elles seront initialisées DANS DOMContentLoaded.
-    let navLinks = {};
-    let modal, modalTitle, modalBody, modalConfirmBtn, modalCancelBtn, toastContainer;
-    let authInfoDiv, userEmailSpan, logoutBtn, selectTournamentBtn, currentTournamentNameDisplay;
+    // --- Cache des éléments DOM de la modale ---
+    const actionModal = document.getElementById('actionModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalBody = document.getElementById('modalBody');
+    const modalCancelBtn = document.getElementById('modalCancelBtn');
+    let modalConfirmBtn = document.getElementById('modalConfirmBtn');
 
+    // --- Cache des éléments DOM de la navigation et de l'authentification ---
+    const authInfoDiv = document.getElementById('auth-info');
+    const userEmailSpan = document.getElementById('user-email');
+    const currentTournamentNameSpan = document.getElementById('current-tournament-name');
+    const selectTournamentBtn = document.getElementById('select-tournament-btn');
+    const logoutBtn = document.getElementById('logout-btn');
+    const navLinks = {
+        equipes: document.getElementById('nav-equipes'),
+        brassages: document.getElementById('nav-brassages'),
+        eliminatoires: document.getElementById('nav-eliminatoires'),
+        classements: document.getElementById('nav-classements'),
+        collaborators: document.getElementById('nav-collaborators')
+    };
 
-    // --- Fonctions Utilitaires Générales ---
+    // --- Fonctions Utilitaires ---
 
     /**
-     * Échappe les caractères HTML pour prévenir les attaques XSS.
-     * @param {string} str La chaîne à échapper.
-     * @returns {string} La chaîne échappée.
+     * Échappe les caractères HTML spéciaux.
+     * @param {string} text Le texte à échapper.
+     * @returns {string} Le texte échappé.
      */
-    function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.appendChild(document.createTextNode(str));
-        return div.innerHTML;
+    function escapeHtml(text) {
+        const s = String(text);
+        const map = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;',
+            '`': '&#96;',
+            '$': '&#36;'
+        };
+        return s.replace(/[&<>"'`$]/g, function(m) { return map[m]; });
     }
 
     /**
-     * Mélange un tableau de manière aléatoire (algorithme de Fisher-Yates).
+     * Affiche un message temporaire (toast) à l'utilisateur.
+     * @param {string} message - Le message à afficher.
+     * @param {string} type - Le type de message ('success', 'error', 'info').
+     */
+    function showToast(message, type = 'info') {
+        let toastContainer = document.getElementById('toast-container');
+        if (!toastContainer) {
+            toastContainer = document.createElement('div');
+            toastContainer.id = 'toast-container';
+            toastContainer.className = 'fixed top-4 right-4 z-[100] flex flex-col space-y-2';
+            document.body.appendChild(toastContainer);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `p-4 rounded-lg shadow-md text-white flex items-center space-x-2 transition-opacity duration-300 ease-out opacity-0`;
+
+        let bgColor = '';
+        let icon = '';
+        switch (type) {
+            case 'success':
+                bgColor = 'bg-green-500';
+                icon = '<i class="fas fa-check-circle"></i>';
+                break;
+            case 'error':
+                bgColor = 'bg-red-500';
+                icon = '<i class="fas fa-times-circle"></i>';
+                break;
+            case 'info':
+            default:
+                bgColor = 'bg-blue-500';
+                icon = '<i class="fas fa-info-circle"></i>';
+                break;
+        }
+
+        toast.classList.add(bgColor);
+        toast.innerHTML = `${icon} <span>${message}</span>`;
+
+        toastContainer.appendChild(toast);
+
+        // Animate in
+        setTimeout(() => {
+            toast.classList.remove('opacity-0');
+            toast.classList.add('opacity-100');
+        }, 10);
+
+        // Animate out and remove
+        setTimeout(() => {
+            toast.classList.remove('opacity-100');
+            toast.classList.add('opacity-0');
+            toast.addEventListener('transitionend', () => toast.remove());
+        }, 3000);
+    }
+
+    /**
+     * Affiche une modale générique.
+     * @param {string} title Le titre de la modale.
+     * @param {HTMLElement} bodyContent Le contenu HTML à afficher dans le corps de la modale.
+     * @param {Function} confirmCallback La fonction à appeler si l'utilisateur confirme.
+     * @param {boolean} isDelete Indique si la modale est pour une suppression (bouton rouge).
+     */
+    function showModal(title, bodyContent, confirmCallback, isDelete = false) {
+        modalTitle.textContent = title;
+        modalBody.innerHTML = '';
+        modalBody.appendChild(bodyContent);
+        actionModal.classList.remove('hidden');
+
+        // Réaffecter modalConfirmBtn pour s'assurer que les anciens écouteurs sont retirés
+        const oldConfirmBtn = modalConfirmBtn;
+        const newConfirmBtn = oldConfirmBtn.cloneNode(true);
+        oldConfirmBtn.parentNode.replaceChild(newConfirmBtn, oldConfirmBtn);
+        modalConfirmBtn = newConfirmBtn; // Met à jour la référence
+
+        if (isDelete) {
+            modalConfirmBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700', 'focus:ring-blue-500');
+            modalConfirmBtn.classList.add('bg-red-600', 'hover:bg-red-700', 'focus:ring-red-500');
+        } else {
+            modalConfirmBtn.classList.remove('bg-red-600', 'hover:bg-red-700', 'focus:ring-red-500');
+            modalConfirmBtn.classList.add('bg-blue-600', 'hover:bg-blue-700', 'focus:ring-blue-500');
+        }
+
+        modalConfirmBtn.onclick = () => {
+            confirmCallback(); // Exécuter la logique de confirmation spécifique
+            hideModal(); // Puis masquer la modale
+        };
+
+        modalCancelBtn.onclick = () => {
+            hideModal();
+        };
+    }
+
+    /**
+     * Cache la modale générique.
+     */
+    function hideModal() {
+        actionModal.classList.add('hidden');
+        modalBody.innerHTML = '';
+        modalConfirmBtn.onclick = null; // Supprimer l'écouteur pour éviter les effets secondaires
+        modalCancelBtn.onclick = null; // Supprimer l'écouteur pour éviter les effets secondaires
+    }
+
+    /**
+     * Mélange un tableau (algorithme de Fisher-Yates).
      * @param {Array} array Le tableau à mélanger.
      * @returns {Array} Le tableau mélangé.
      */
@@ -72,267 +191,635 @@
         return array;
     }
 
+    // --- Fonctions de Persistance (Firestore) ---
+
     /**
-     * Affiche un message toast à l'utilisateur.
-     * @param {string} message Le message à afficher.
-     * @param {string} type Le type de message ('success', 'error', 'info').
-     * @param {number} duration La durée d'affichage en ms (par défaut 3000).
+     * Référence au document Firestore pour les données privées de l'utilisateur (ex: tournoi actif).
+     * @returns {import("https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js").DocumentReference|null} La référence du document ou null si Firebase n'est pas prêt.
      */
-    function showToast(message, type = 'info', duration = 3000) {
-        if (!toastContainer) {
-            console.error("Toast container non trouvé! Impossible d'afficher le toast: ", message);
-            return;
+    function getUserPrivateDataRef() {
+        if (window.db && window.userId && window.appId) {
+            return window.doc(window.db, 'artifacts', window.appId, 'users', window.userId, 'privateData', 'activeTournament');
         }
-
-        const toast = document.createElement('div');
-        toast.className = `p-4 rounded-lg shadow-lg text-white transform transition-all duration-300 ease-out z-50`;
-
-        switch (type) {
-            case 'success':
-                toast.classList.add('bg-green-500');
-                break;
-            case 'error':
-                toast.classList.add('bg-red-500');
-                break;
-            case 'info':
-            default:
-                toast.classList.add('bg-blue-500');
-                break;
-        }
-
-        toast.textContent = message;
-        toastContainer.appendChild(toast);
-
-        // Apparition
-        setTimeout(() => {
-            toast.style.opacity = '1';
-        }, 10);
-
-        // Disparition
-        setTimeout(() => {
-            toast.style.opacity = '0';
-            toast.addEventListener('transitionend', () => toast.remove());
-        }, duration);
+        console.error("Firebase, User ID ou App ID non initialisé pour les données privées.");
+        return null;
     }
 
     /**
-     * Affiche une modale personnalisée.
-     * @param {string} title Le titre de la modale.
-     * @param {HTMLElement} content L'élément HTML à afficher dans le corps de la modale.
-     * @param {Function} confirmCallback La fonction à exécuter si l'utilisateur confirme.
-     * @param {boolean} isDestructive Si true, le bouton de confirmation est rouge.
+     * Référence au document Firestore pour un tournoi spécifique.
+     * @param {string} tournamentId L'ID du tournoi.
+     * @returns {import("https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js").DocumentReference|null} La référence du document ou null si Firebase n'est pas prêt.
      */
-    function showModal(title, content, confirmCallback, isDestructive = false) {
-        if (!modal || !modalTitle || !modalBody || !modalConfirmBtn || !modalCancelBtn) {
-            console.error("Éléments de la modale non trouvés! Impossible d'afficher la modale.");
-            return;
+    function getTournamentDataRef(tournamentId) {
+        if (window.db && tournamentId) {
+            return window.doc(window.db, 'tournaments', tournamentId);
         }
-
-        modalTitle.textContent = title;
-        modalBody.innerHTML = '';
-        modalBody.appendChild(content);
-
-        modalConfirmBtn.className = `inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 text-base font-medium text-white hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 sm:ml-3 sm:w-auto sm:text-sm transition ease-in-out duration-150`;
-
-        if (isDestructive) {
-            modalConfirmBtn.classList.add('bg-red-600', 'hover:bg-red-700', 'focus:ring-red-500');
-        } else {
-            modalConfirmBtn.classList.add('bg-blue-600', 'hover:bg-blue-700', 'focus:ring-blue-500');
-        }
-
-        modalConfirmBtn.onclick = () => {
-            confirmCallback();
-            hideModal();
-        };
-        // Assurez-vous que la modale est visible et avec la bonne transition
-        modal.classList.remove('hidden');
-        setTimeout(() => modal.querySelector('.modal-content').classList.add('opacity-100', 'scale-100'), 10);
+        console.error("Firebase ou Tournament ID non initialisé pour les données du tournoi.");
+        return null;
     }
 
     /**
-     * Cache la modale personnalisée.
+     * Sauvegarde toutes les données du tournoi actif dans Firestore.
+     * Cette fonction est appelée chaque fois que des données sont modifiées.
      */
-    function hideModal() {
-        if (!modal) {
-            console.error("Élément de la modale non trouvé pour la cacher!");
+    async function saveAllData() {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour sauvegarder les données.", "error");
             return;
         }
-        modal.querySelector('.modal-content').classList.remove('opacity-100', 'scale-100');
-        modal.querySelector('.modal-content').classList.add('opacity-0', 'scale-95');
-        setTimeout(() => modal.classList.add('hidden'), 300);
+        if (!currentTournamentId) {
+            showToast("Aucun tournoi sélectionné. Veuillez créer ou sélectionner un tournoi d'abord.", "error");
+            return;
+        }
+
+        const tournamentDocRef = getTournamentDataRef(currentTournamentId);
+        if (!tournamentDocRef) {
+            showToast("Erreur: Impossible de sauvegarder les données, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const dataToSave = {
+                // Métadonnées du tournoi (ne pas écraser si déjà définies, sauf si l'on veut les rendre éditables)
+                // Pour l'instant, on les reprend de currentTournamentData pour s'assurer qu'elles sont là.
+                name: currentTournamentData.name,
+                date: currentTournamentData.date,
+                numTeamsAllowed: currentTournamentData.numTeamsAllowed,
+                ownerId: currentTournamentData.ownerId,
+                collaboratorIds: currentTournamentData.collaboratorIds || [], // Assurez-vous que c'est un tableau
+                collaboratorEmails: currentTournamentData.collaboratorEmails || [], // Assurez-vous que c'est un tableau
+
+                // Données spécifiques au tournoi
+                allTeams: allTeams,
+                allBrassagePhases: allBrassagePhases,
+                eliminationPhases: eliminationPhases,
+                currentSecondaryGroupsPreview: currentSecondaryGroupsPreview,
+                eliminatedTeams: Array.from(eliminatedTeams), // Convertir le Set en Array
+                currentDisplayedPhaseId: currentDisplayedPhaseId
+            };
+            await window.setDoc(tournamentDocRef, dataToSave);
+            console.log("Données du tournoi sauvegardées avec succès dans Firestore:", currentTournamentId);
+            // showToast("Données sauvegardées.", "success"); // Peut être trop fréquent
+        } catch (e) {
+            console.error("Erreur lors de la sauvegarde des données du tournoi dans Firestore:", e);
+            showToast("Erreur lors de la sauvegarde des données du tournoi.", "error");
+        }
     }
 
-
-    // --- Intégration Firebase (Authentification & Firestore) ou LocalStorage ---
-    // Les fonctions et objets Firebase sont maintenant exposés globalement par le script inline dans index.html.
-    // window.auth, window.db, window.userId, window.appId, etc. sont disponibles directement.
-
-    // Firestore Unsubscribe functions
-    window.currentTournamentUnsubscribe = null;
-    window.allUserTournamentsUnsubscribe = null;
-
     /**
-     * Charge toutes les données du tournoi actuellement sélectionné (Firestore) ou les données locales (localStorage).
-     * Met en place un listener en temps réel si Firestore est utilisé.
+     * Charge toutes les données du tournoi actif depuis Firestore.
+     * Met également en place un listener en temps réel.
      */
     async function loadAllData() {
-        // Si un utilisateur est connecté et qu'un tournoi est sélectionné, charger depuis Firestore
-        if (window.db && window.userId && window.appId) {
-            const storedTournamentId = localStorage.getItem(CURRENT_TOURNAMENT_ID_KEY);
-            if (storedTournamentId) {
-                currentTournamentId = storedTournamentId;
-            }
+        if (!window.userId) {
+            console.log("Utilisateur non connecté, impossible de charger les données du tournoi.");
+            updateUIForAuthStatus(); // Mettre à jour l'UI pour l'état non connecté
+            return;
+        }
 
-            if (!currentTournamentId) {
-                console.log("Aucun tournoi sélectionné. Redirection vers le tableau de bord des tournois.");
-                handleLocationHash(); // Rediriger pour choisir/créer un tournoi
-                return;
-            }
+        const userPrivateDataRef = getUserPrivateDataRef();
+        if (!userPrivateDataRef) {
+            showToast("Erreur: Impossible de charger les données, Firebase non prêt.", "error");
+            return;
+        }
 
-            // Annuler l'abonnement précédent si existant
-            if (window.currentTournamentUnsubscribe) {
-                window.currentTournamentUnsubscribe();
-            }
-
-            const tournamentDocRef = window.doc(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`, currentTournamentId);
-
-            window.currentTournamentUnsubscribe = window.onSnapshot(tournamentDocRef, (docSnapshot) => {
-                if (docSnapshot.exists()) {
-                    currentTournamentData = { id: docSnapshot.id, ...docSnapshot.data() };
-                    console.log("Current tournament data loaded/updated from Firestore:", currentTournamentData);
-
-                    // Mettre à jour les variables globales avec les données du tournoi Firestore
-                    allTeams = currentTournamentData.teams || [];
-                    allBrassagePhases = currentTournamentData.brassagePhases || [];
-                    eliminationPhases = currentTournamentData.eliminationPhases || {};
-                    currentSecondaryGroupsPreview = currentTournamentData.secondaryGroupsPreview || {};
-                    eliminatedTeams = new Set(currentTournamentData.eliminatedTeams || []);
-                    currentDisplayedPhaseId = currentTournamentData.currentDisplayedPhaseId || null;
-
-                    rebuildMatchOccurrenceMap(); // Reconstruire la map après chargement
-                    handleLocationHash(); // Re-render la page actuelle avec les nouvelles données
-                    showToast(`Données du tournoi "${escapeHtml(currentTournamentData.name)}" chargées.`, "info");
+        // Étape 1: Charger l'ID du tournoi actif de l'utilisateur
+        window.onSnapshot(userPrivateDataRef, async (docSnap) => {
+            if (docSnap.exists() && docSnap.data().activeTournamentId) {
+                const activeTournamentIdFromUser = docSnap.data().activeTournamentId;
+                if (currentTournamentId !== activeTournamentIdFromUser) {
+                    console.log("Nouveau tournoi actif détecté:", activeTournamentIdFromUser);
+                    currentTournamentId = activeTournamentIdFromUser;
+                    await fetchAndListenToTournamentData(currentTournamentId);
                 } else {
-                    console.warn("Le tournoi sélectionné n'existe plus ou n'est pas accessible.");
-                    showToast("Le tournoi sélectionné n'existe plus ou n'est pas accessible. Veuillez en choisir un autre.", "error");
-                    currentTournamentId = null;
-                    currentTournamentData = null;
-                    localStorage.removeItem(CURRENT_TOURNAMENT_ID_KEY);
-                    handleLocationHash(); // Rediriger pour choisir un nouveau tournoi
+                    console.log("Tournoi actif inchangé:", currentTournamentId);
+                    // Si le tournoi est le même, on ne refetch pas, on attend la mise à jour du listener du tournoi.
                 }
-            }, (error) => {
-                console.error("Error fetching current tournament data from Firestore:", error);
-                showToast("Erreur lors du chargement des données du tournoi actuel.", "error");
+            } else {
+                console.log("Aucun tournoi actif enregistré pour cet utilisateur ou document inexistant.");
                 currentTournamentId = null;
                 currentTournamentData = null;
-                localStorage.removeItem(CURRENT_TOURNAMENT_ID_KEY);
-                handleLocationHash();
-            });
-        } else {
-            // Mode simulation (non connecté ou pas de Firestore)
-            console.log("Chargement des données depuis localStorage (mode simulation).");
-            try {
-                allTeams = JSON.parse(localStorage.getItem(TEAM_DATA_KEY) || '[]');
-                allBrassagePhases = JSON.parse(localStorage.getItem(BRASSAGE_PHASES_KEY) || '[]');
-                eliminationPhases = JSON.parse(localStorage.getItem(ELIMINATION_PHASES_KEY) || '{}');
-                currentSecondaryGroupsPreview = JSON.parse(localStorage.getItem(SECONDARY_GROUPS_PREVIEW_KEY) || '{}');
-                const storedEliminatedTeams = JSON.parse(localStorage.getItem(ELIMINATED_TEAMS_KEY) || '[]');
-                eliminatedTeams = new Set(storedEliminatedTeams);
-                
-                // En mode simulation, currentTournamentData est une représentation locale
-                currentTournamentData = {
-                    id: 'simulation',
-                    name: 'Tournoi de Simulation',
-                    numTeamsAllowed: MAX_SIMULATION_TEAMS, // Limite pour la simulation
-                    teams: allTeams,
-                    brassagePhases: allBrassagePhases,
-                    eliminationPhases: eliminationPhases,
-                    secondaryGroupsPreview: currentSecondaryGroupsPreview,
-                    eliminatedTeams: Array.from(eliminatedTeams),
-                    currentDisplayedPhaseId: null
-                };
-
-                rebuildMatchOccurrenceMap();
-                console.log("DEBUG: Données chargées depuis localStorage - Équipes:", allTeams, "Brassages:", allBrassagePhases);
-                handleLocationHash(); // Re-render la page actuelle
-            } catch (e) {
-                console.error("ERREUR: Impossible de charger les données depuis localStorage:", e);
-                // Réinitialiser en cas d'erreur de chargement local
+                // Réinitialiser les données locales si aucun tournoi actif
                 allTeams = [];
                 allBrassagePhases = [];
                 eliminationPhases = {};
                 currentSecondaryGroupsPreview = {};
                 eliminatedTeams = new Set();
-                matchOccurrenceMap = new Map();
-                currentTournamentData = { id: 'simulation', name: 'Tournoi de Simulation', numTeamsAllowed: MAX_SIMULATION_TEAMS, teams: [], brassagePhases: [], eliminationPhases: {}, secondaryGroupsPreview: {}, eliminatedTeams: [], currentDisplayedPhaseId: null };
-                handleLocationHash();
+                currentDisplayedPhaseId = null;
+                rebuildMatchOccurrenceMap(); // Assurez-vous que la map est vide
+                updateTournamentDisplay(); // Mettre à jour l'UI (nom du tournoi vide)
+                handleLocationHash(); // Rediriger vers le tableau de bord des tournois
             }
+        }, (error) => {
+            console.error("Erreur lors de l'écoute des données privées de l'utilisateur:", error);
+            showToast("Erreur de synchronisation des données utilisateur.", "error");
+        });
+
+        // Étape 2: Charger la liste de TOUS les tournois de l'utilisateur (pour le tableau de bord)
+        await fetchUserTournamentsList();
+    }
+
+    /**
+     * Récupère et met en place un listener pour les données d'un tournoi spécifique.
+     * @param {string} tournamentId L'ID du tournoi à charger.
+     */
+    async function fetchAndListenToTournamentData(tournamentId) {
+        if (!tournamentId) {
+            console.warn("Tentative de charger un tournoi avec un ID vide.");
+            return;
+        }
+
+        const tournamentDocRef = getTournamentDataRef(tournamentId);
+        if (!tournamentDocRef) {
+            showToast("Erreur: Impossible de charger le tournoi, référence non valide.", "error");
+            return;
+        }
+
+        // Détacher l'ancien listener si existant
+        if (window.currentTournamentUnsubscribe) {
+            window.currentTournamentUnsubscribe();
+            console.log("Ancien listener de tournoi détaché.");
+        }
+
+        // Mettre en place un nouveau listener pour le tournoi sélectionné
+        window.currentTournamentUnsubscribe = window.onSnapshot(tournamentDocRef, (docSnap) => {
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                currentTournamentData = data; // Stocker les métadonnées du tournoi
+                allTeams = data.allTeams || [];
+                allBrassagePhases = data.allBrassagePhases || [];
+                eliminationPhases = data.eliminationPhases || {};
+                currentSecondaryGroupsPreview = data.currentSecondaryGroupsPreview || {};
+                eliminatedTeams = new Set(data.eliminatedTeams || []);
+                currentDisplayedPhaseId = data.currentDisplayedPhaseId || null;
+
+                console.log("Données du tournoi chargées/mises à jour:", tournamentId);
+                rebuildMatchOccurrenceMap();
+                updateTournamentDisplay(); // Mettre à jour l'UI avec le nom du tournoi
+                handleLocationHash(); // Rendre la page actuelle (ou rediriger si nécessaire)
+            } else {
+                console.warn(`Le tournoi ${tournamentId} n'existe plus ou l'accès est refusé.`);
+                showToast(`Le tournoi "${tournamentId}" n'existe plus ou l'accès est refusé.`, "error");
+                // Si le tournoi n'existe plus, on le désélectionne
+                currentTournamentId = null;
+                currentTournamentData = null;
+                // Effacer l'ID du tournoi actif des données privées de l'utilisateur
+                const userPrivateDataRef = getUserPrivateDataRef();
+                if (userPrivateDataRef) {
+                    window.setDoc(userPrivateDataRef, { activeTournamentId: null }, { merge: true });
+                }
+                handleLocationHash(); // Rediriger vers le tableau de bord des tournois
+            }
+        }, (error) => {
+            console.error("Erreur lors de l'écoute des données du tournoi:", error);
+            showToast("Erreur de synchronisation des données du tournoi.", "error");
+        });
+    }
+
+    /**
+     * Récupère la liste de tous les tournois de l'utilisateur (propriétaire ou collaborateur).
+     */
+    async function fetchUserTournamentsList() {
+        if (!window.userId || !window.db) {
+            console.warn("Firebase ou User ID non prêt pour récupérer la liste des tournois.");
+            allUserTournaments = [];
+            return;
+        }
+
+        try {
+            const tournamentsCollectionRef = window.collection(window.db, 'tournaments');
+            const ownerQuery = window.query(tournamentsCollectionRef, window.where('ownerId', '==', window.userId));
+            const collaboratorQuery = window.query(tournamentsCollectionRef, window.where('collaboratorIds', 'array-contains', window.userId));
+
+            const [ownerSnapshot, collaboratorSnapshot] = await Promise.all([
+                window.getDocs(ownerQuery),
+                window.getDocs(collaboratorQuery)
+            ]);
+
+            const ownerTournaments = ownerSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const collaboratorTournaments = collaboratorSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+            // Fusionner et dédupliquer les tournois
+            const allTournamentsMap = new Map();
+            ownerTournaments.forEach(t => allTournamentsMap.set(t.id, t));
+            collaboratorTournaments.forEach(t => allTournamentsMap.set(t.id, t));
+
+            allUserTournaments = Array.from(allTournamentsMap.values());
+            console.log("Liste des tournois de l'utilisateur mise à jour:", allUserTournaments.length);
+
+            // Si l'utilisateur n'a pas de tournoi actif mais en a dans sa liste, on peut en sélectionner un par défaut
+            if (!currentTournamentId && allUserTournaments.length > 0) {
+                // Tenter de charger le premier tournoi de la liste comme tournoi actif
+                await selectTournament(allUserTournaments[0].id);
+            } else if (!currentTournamentId && allUserTournaments.length === 0) {
+                // Si aucun tournoi et aucun tournoi actif, rediriger vers le tableau de bord des tournois
+                handleLocationHash(); // Cela appellera renderTournamentDashboard si le hash est vide ou #tournaments
+            }
+        } catch (error) {
+            console.error("Erreur lors de la récupération de la liste des tournois:", error);
+            showToast("Erreur lors du chargement de la liste de vos tournois.", "error");
+            allUserTournaments = [];
         }
     }
 
     /**
-     * Sauvegarde toutes les données du tournoi actuellement sélectionné dans Firestore ou localStorage.
+     * Sélectionne un tournoi comme tournoi actif pour l'utilisateur.
+     * @param {string} tournamentId L'ID du tournoi à activer.
      */
-    async function saveAllData() {
-        // Si un utilisateur est connecté et qu'un tournoi est sélectionné, sauvegarder dans Firestore
-        if (window.db && window.userId && currentTournamentId && window.appId) {
-            const tournamentDocRef = window.doc(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`, currentTournamentId);
+    async function selectTournament(tournamentId) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour sélectionner un tournoi.", "error");
+            return;
+        }
+        if (currentTournamentId === tournamentId) {
+            showToast("Ce tournoi est déjà sélectionné.", "info");
+            return;
+        }
 
-            const dataToSave = {
-                teams: allTeams,
-                brassagePhases: allBrassagePhases,
-                eliminationPhases: eliminationPhases,
-                secondaryGroupsPreview: currentSecondaryGroupsPreview,
-                eliminatedTeams: Array.from(eliminatedTeams),
-                currentDisplayedPhaseId: currentDisplayedPhaseId,
-                // Conserver les métadonnées du tournoi
-                name: currentTournamentData ? currentTournamentData.name : 'N/A',
-                date: currentTournamentData ? currentTournamentData.date : 'N/A',
-                numTeamsAllowed: currentTournamentData ? currentTournamentData.numTeamsAllowed : 0,
+        const userPrivateDataRef = getUserPrivateDataRef();
+        if (!userPrivateDataRef) {
+            showToast("Erreur: Impossible de sélectionner le tournoi, Firebase non prêt.", "error");
+            return;
+        }
+
+        try {
+            await window.setDoc(userPrivateDataRef, { activeTournamentId: tournamentId }, { merge: true });
+            console.log(`Tournoi ${tournamentId} défini comme actif.`);
+            // loadAllData() sera déclenché par le listener sur userPrivateDataRef
+            showToast("Tournoi sélectionné avec succès !", "success");
+            window.location.hash = '#home'; // Rediriger vers l'accueil du tournoi
+        } catch (error) {
+            console.error("Erreur lors de la définition du tournoi actif:", error);
+            showToast("Erreur lors de la sélection du tournoi.", "error");
+        }
+    }
+
+    /**
+     * Crée un nouveau tournoi.
+     * @param {string} name Nom du tournoi.
+     * @param {string} date Date du tournoi.
+     * @param {number} numTeams Nombre d'équipes du tournoi.
+     */
+    async function createNewTournament(name, date, numTeams) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour créer un tournoi.", "error");
+            return;
+        }
+
+        if (!name.trim() || !date || isNaN(numTeams) || numTeams <= 0) {
+            showToast("Veuillez remplir tous les champs du tournoi (Nom, Date, Nombre d'équipes).", "error");
+            return;
+        }
+
+        try {
+            const newTournamentDocRef = window.doc(window.collection(window.db, 'tournaments')); // Firestore générera un ID
+            const newTournamentId = newTournamentDocRef.id;
+
+            const initialTournamentData = {
+                name: name.trim(),
+                date: date,
+                numTeamsAllowed: numTeams,
                 ownerId: window.userId,
-                createdAt: currentTournamentData && currentTournamentData.createdAt ? currentTournamentData.createdAt : (window.serverTimestamp ? window.serverTimestamp() : Date.now()),
+                collaboratorIds: [], // Initialement vide
+                collaboratorEmails: [], // Pour affichage/gestion, pas pour les règles de sécurité
+                createdAt: window.serverTimestamp ? window.serverTimestamp() : Date.now(), // Utiliser serverTimestamp si disponible
+                // Initialiser les données du tournoi avec des valeurs vides
+                allTeams: [],
+                allBrassagePhases: [],
+                eliminationPhases: {},
+                currentSecondaryGroupsPreview: {},
+                eliminatedTeams: [],
+                currentDisplayedPhaseId: null
             };
 
-            try {
-                await window.setDoc(tournamentDocRef, dataToSave, { merge: true });
-                console.log("Données du tournoi sauvegardées avec succès dans Firestore !");
-            } catch (error) {
-                console.error("Erreur lors de la sauvegarde des données du tournoi dans Firestore:", error);
-                showToast("Erreur lors de la sauvegarde des données.", "error");
-            }
-        } else {
-            // Mode simulation (non connecté) - Sauvegarde dans localStorage
-            console.log("Sauvegarde des données dans localStorage (mode simulation).");
-            localStorage.setItem(TEAM_DATA_KEY, JSON.stringify(allTeams));
-            localStorage.setItem(BRASSAGE_PHASES_KEY, JSON.stringify(allBrassagePhases));
-            localStorage.setItem(ELIMINATION_PHASES_KEY, JSON.stringify(eliminationPhases));
-            localStorage.setItem(SECONDARY_GROUPS_PREVIEW_KEY, JSON.stringify(currentSecondaryGroupsPreview));
-            localStorage.setItem(ELIMINATED_TEAMS_KEY, JSON.stringify(Array.from(eliminatedTeams)));
-            // Pas de currentTournamentId en mode simulation, donc pas de sauvegarde pour cela.
-            console.log("DEBUG: Données sauvegardées dans localStorage.");
+            await window.setDoc(newTournamentDocRef, initialTournamentData);
+            console.log("Nouveau tournoi créé avec ID:", newTournamentId);
+            showToast("Tournoi créé avec succès !", "success");
+
+            // Définir ce nouveau tournoi comme le tournoi actif de l'utilisateur
+            await selectTournament(newTournamentId);
+            // fetchUserTournamentsList() sera appelé par le listener de userPrivateDataRef
+            // handleLocationHash() sera appelé après le chargement du tournoi
+        } catch (error) {
+            console.error("Erreur lors de la création du tournoi:", error);
+            showToast("Erreur lors de la création du tournoi.", "error");
         }
-        rebuildMatchOccurrenceMap(); // Rebuild map after saving changes
-        updateRepeatedMatchesCountDisplay(); // Update display after saving phases
     }
 
+    /**
+     * Supprime un tournoi. Seul le propriétaire peut le faire.
+     * @param {string} tournamentId L'ID du tournoi à supprimer.
+     */
+    async function deleteTournament(tournamentId) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour supprimer un tournoi.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible de supprimer le tournoi, référence non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas le supprimer.", "error");
+                return;
+            }
+
+            const messageContent = document.createElement('p');
+            messageContent.textContent = `Êtes-vous sûr de vouloir supprimer le tournoi "${escapeHtml(data.name)}" ? Cette action est irréversible.`;
+            messageContent.className = 'text-gray-700';
+
+            showModal('Confirmer la suppression du tournoi', messageContent, async () => {
+                await window.deleteDoc(tournamentRef);
+                showToast(`Tournoi "${escapeHtml(data.name)}" supprimé.`, "success");
+
+                // Si le tournoi supprimé était le tournoi actif, le désélectionner
+                if (currentTournamentId === tournamentId) {
+                    currentTournamentId = null;
+                    currentTournamentData = null;
+                    const userPrivateDataRef = getUserPrivateDataRef();
+                    if (userPrivateDataRef) {
+                        await window.setDoc(userPrivateDataRef, { activeTournamentId: null }, { merge: true });
+                    }
+                }
+                // La liste des tournois sera mise à jour par fetchUserTournamentsList via onSnapshot
+                // handleLocationHash() sera appelé après la mise à jour de la liste
+            }, true); // Bouton rouge pour la suppression
+        } catch (error) {
+            console.error("Erreur lors de la suppression du tournoi:", error);
+            showToast("Erreur lors de la suppression du tournoi.", "error");
+        }
+    }
 
     /**
-     * Rebuilds the match occurrence map.
-     * This helps track which team pairs have played in which phases.
+     * Ajoute un collaborateur à un tournoi par son UID.
+     * Cette fonction est celle qui respecte les règles de sécurité Firestore.
+     * @param {string} tournamentId L'ID du tournoi.
+     * @param {string} collaboratorUid L'UID du collaborateur à ajouter.
+     */
+    async function addCollaboratorByUid(tournamentId, collaboratorUid) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour ajouter un collaborateur.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible d'ajouter un collaborateur, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas ajouter de collaborateurs.", "error");
+                return;
+            }
+
+            let currentCollaboratorIds = data.collaboratorIds || [];
+            if (currentCollaboratorIds.includes(collaboratorUid)) {
+                showToast("Cet UID est déjà un collaborateur.", "info");
+                return;
+            }
+
+            currentCollaboratorIds.push(collaboratorUid);
+            await window.updateDoc(tournamentRef, {
+                collaboratorIds: currentCollaboratorIds
+            });
+            showToast(`Collaborateur (UID: ${collaboratorUid}) ajouté avec succès !`, "success");
+            // Le rendu sera mis à jour par le listener du tournoi
+        } catch (error) {
+            console.error("Erreur lors de l'ajout du collaborateur par UID:", error);
+            showToast("Erreur lors de l'ajout du collaborateur.", "error");
+        }
+    }
+
+    /**
+     * Ajoute un collaborateur à un tournoi par son email (pour affichage/gestion, pas pour sécurité directe).
+     * @param {string} tournamentId L'ID du tournoi.
+     * @param {string} collaboratorEmail L'email du collaborateur à ajouter.
+     */
+    async function addCollaboratorByEmailForDisplay(tournamentId, collaboratorEmail) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour ajouter un collaborateur.", "error");
+            return;
+        }
+        if (!collaboratorEmail.trim()) {
+            showToast("L'adresse e-mail ne peut pas être vide.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible d'ajouter un collaborateur, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas ajouter de collaborateurs.", "error");
+                return;
+            }
+
+            let currentCollaboratorEmails = data.collaboratorEmails || [];
+            if (currentCollaboratorEmails.includes(collaboratorEmail.trim())) {
+                showToast("Cette adresse e-mail est déjà dans la liste des collaborateurs.", "info");
+                return;
+            }
+            if (data.ownerId === window.userId && window.auth.currentUser.email === collaboratorEmail.trim()) {
+                 showToast("Vous êtes déjà le propriétaire de ce tournoi.", "info");
+                 return;
+            }
+
+            currentCollaboratorEmails.push(collaboratorEmail.trim());
+            await window.updateDoc(tournamentRef, {
+                collaboratorEmails: currentCollaboratorEmails
+            });
+            showToast(`Adresse e-mail "${escapeHtml(collaboratorEmail)}" ajoutée à la liste des collaborateurs.`, "success");
+            showToast("Rappel: Pour un accès réel, l'UID de cet utilisateur doit être ajouté aux règles de sécurité via une fonction backend.", "info", 5000);
+            // Le rendu sera mis à jour par le listener du tournoi
+        } catch (error) {
+            console.error("Erreur lors de l'ajout du collaborateur par email:", error);
+            showToast("Erreur lors de l'ajout du collaborateur par email.", "error");
+        }
+    }
+
+    /**
+     * Supprime un collaborateur d'un tournoi par son UID.
+     * @param {string} tournamentId L'ID du tournoi.
+     * @param {string} collaboratorUid L'UID du collaborateur à supprimer.
+     */
+    async function removeCollaboratorByUid(tournamentId, collaboratorUid) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour gérer les collaborateurs.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible de supprimer le collaborateur, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas supprimer de collaborateurs.", "error");
+                return;
+            }
+            if (collaboratorUid === window.userId) {
+                showToast("Vous ne pouvez pas vous retirer vous-même en tant que propriétaire.", "error");
+                return;
+            }
+
+            let currentCollaboratorIds = data.collaboratorIds || [];
+            const updatedCollaboratorIds = currentCollaboratorIds.filter(uid => uid !== collaboratorUid);
+
+            if (updatedCollaboratorIds.length === currentCollaboratorIds.length) {
+                showToast("Cet UID n'est pas un collaborateur de ce tournoi.", "info");
+                return;
+            }
+
+            await window.updateDoc(tournamentRef, {
+                collaboratorIds: updatedCollaboratorIds
+            });
+            showToast(`Collaborateur (UID: ${collaboratorUid}) supprimé.`, "success");
+            // Le rendu sera mis à jour par le listener du tournoi
+        } catch (error) {
+            console.error("Erreur lors de la suppression du collaborateur par UID:", error);
+            showToast("Erreur lors de la suppression du collaborateur.", "error");
+        }
+    }
+
+    /**
+     * Supprime un collaborateur d'un tournoi par son email (pour affichage/gestion).
+     * @param {string} tournamentId L'ID du tournoi.
+     * @param {string} collaboratorEmail L'email du collaborateur à supprimer.
+     */
+    async function removeCollaboratorByEmailForDisplay(tournamentId, collaboratorEmail) {
+        if (!window.userId) {
+            showToast("Vous devez être connecté pour gérer les collaborateurs.", "error");
+            return;
+        }
+
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        if (!tournamentRef) {
+            showToast("Erreur: Impossible de supprimer le collaborateur, référence au tournoi non valide.", "error");
+            return;
+        }
+
+        try {
+            const docSnap = await window.getDoc(tournamentRef);
+            if (!docSnap.exists()) {
+                showToast("Le tournoi n'existe pas.", "error");
+                return;
+            }
+
+            const data = docSnap.data();
+            if (data.ownerId !== window.userId) {
+                showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas supprimer de collaborateurs.", "error");
+                return;
+            }
+            if (data.ownerId === window.userId && window.auth.currentUser.email === collaboratorEmail.trim()) {
+                 showToast("Vous êtes le propriétaire, vous ne pouvez pas vous retirer de la liste des collaborateurs.", "error");
+                 return;
+            }
+
+            let currentCollaboratorEmails = data.collaboratorEmails || [];
+            const updatedCollaboratorEmails = currentCollaboratorEmails.filter(email => email !== collaboratorEmail.trim());
+
+            if (updatedCollaboratorEmails.length === currentCollaboratorEmails.length) {
+                showToast("Cette adresse e-mail n'est pas dans la liste des collaborateurs.", "info");
+                return;
+            }
+
+            await window.updateDoc(tournamentRef, {
+                collaboratorEmails: updatedCollaboratorEmails
+            });
+            showToast(`Adresse e-mail "${escapeHtml(collaboratorEmail)}" supprimée de la liste.`, "success");
+            // Le rendu sera mis à jour par le listener du tournoi
+        } catch (error) {
+            console.error("Erreur lors de la suppression du collaborateur par email:", error);
+            showToast("Erreur lors de la suppression du collaborateur.", "error");
+        }
+    }
+
+    /**
+     * Met à jour l'affichage du nom du tournoi actif dans la barre de navigation.
+     */
+    function updateTournamentDisplay() {
+        if (currentTournamentData && currentTournamentId) {
+            currentTournamentNameSpan.textContent = `Tournoi: ${escapeHtml(currentTournamentData.name)}`;
+            currentTournamentNameSpan.classList.remove('hidden');
+        } else {
+            currentTournamentNameSpan.textContent = 'Aucun tournoi sélectionné';
+            currentTournamentNameSpan.classList.add('italic');
+        }
+    }
+
+    /**
+     * Met à jour la visibilité des liens de navigation en fonction de l'état d'authentification
+     * et de la sélection d'un tournoi.
+     */
+    function updateNavLinksVisibility() {
+        const isLoggedIn = !!window.userId;
+        const tournamentSelected = !!currentTournamentId;
+
+        authInfoDiv.classList.toggle('hidden', !isLoggedIn);
+        userEmailSpan.textContent = window.auth.currentUser ? window.auth.currentUser.email : '';
+
+        // Afficher/masquer les liens de navigation principaux
+        navLinks.equipes.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.brassages.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.eliminatoires.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.classements.classList.toggle('hidden', !(isLoggedIn && tournamentSelected));
+        navLinks.collaborators.classList.toggle('hidden', !(isLoggedIn && tournamentSelected && currentTournamentData?.ownerId === window.userId)); // Collaborateurs visible seulement pour le propriétaire
+    }
+
+    /**
+     * Reconstruit la map `matchOccurrenceMap` à partir de `allBrassagePhases`.
+     * Ceci est nécessaire après le chargement des données depuis Firestore.
      */
     function rebuildMatchOccurrenceMap() {
-        matchOccurrenceMap = new Map(); // Reset the map
-        allBrassagePhases.forEach(phase => {
-            // Only include actual brassage phases (initial and secondary)
-            if ((phase.type === PHASE_TYPE_INITIAL || phase.type === PHASE_TYPE_SECONDARY_BRASSAGE) && phase.generated && phase.pools) {
+        matchOccurrenceMap.clear(); // Vider la map existante
+        // Seules les phases de brassage (initiales et secondaires) sont pertinentes pour les occurrences de matchs
+        allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE).forEach(phase => {
+            if (phase.generated && phase.pools) {
                 phase.pools.forEach(pool => {
                     pool.matches.forEach(match => {
-                        // Ensure both team IDs are valid before creating the key
-                        if (match.team1Id && match.team2Id) {
-                            // Create a canonical key by sorting IDs so order doesn't matter
+                        if (match.team1Id && match.team2Id) { // S'assurer que les équipes sont définies
                             const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
                             if (!matchOccurrenceMap.has(matchKey)) {
-                                matchOccurrenceMap.set(matchKey, new Set()); // Use a Set to avoid duplicate phase IDs
+                                matchOccurrenceMap.set(matchKey, new Set());
                             }
                             matchOccurrenceMap.get(matchKey).add(phase.id);
                         }
@@ -340,19 +827,19 @@
                 });
             }
         });
-        console.log("DEBUG: Match Occurrence Map rebuilt:", matchOccurrenceMap);
+        console.log("Map des occurrences de matchs reconstruite.");
     }
 
     /**
-     * Calculates and displays the count of repeated matches.
+     * Calcule et affiche le nombre de matchs répétés.
      */
     function updateRepeatedMatchesCountDisplay() {
         const countElement = document.getElementById('repeatedMatchesCount');
         if (countElement) {
             let repeatedCount = 0;
-            // Iterate over the map to count unique repeated encounters
+            // Itérer sur la map pour compter les rencontres répétées uniques
             for (const [matchKey, phaseIdsSet] of matchOccurrenceMap.entries()) {
-                if (phaseIdsSet.size > 1) { // A match is repeated if it occurred in more than one phase
+                if (phaseIdsSet.size > 1) { // Un match est répété s'il a eu lieu dans plus d'une phase
                     repeatedCount++;
                 }
             }
@@ -367,12 +854,12 @@
     }
 
     /**
-     * Checks if a given match has already occurred in another phase.
-     * @param {string} team1Id ID of the first team.
-     * @param {string} team2Id ID of the second team.
-     * @param {string} currentPhaseId ID of the current phase to exclude from the check.
-     * @param {Map} evaluationMatchMap The match occurrence map to use for this check (can be temporary).
-     * @returns {boolean} True if the match is a repeat, false otherwise.
+     * Vérifie si un match donné s'est déjà produit dans une autre phase.
+     * @param {string} team1Id ID de la première équipe.
+     * @param {string} team2Id ID de la deuxième équipe.
+     * @param {string} currentPhaseId ID de la phase actuelle à exclure de la vérification.
+     * @param {Map} evaluationMatchMap La map d'occurrences de matchs à utiliser pour cette vérification (peut être temporaire).
+     * @returns {boolean} Vrai si le match est une répétition, faux sinon.
      */
     function isMatchRepeated(team1Id, team2Id, currentPhaseId, evaluationMatchMap = matchOccurrenceMap) {
         if (!team1Id || !team2Id) return false;
@@ -380,17 +867,17 @@
         const occurrences = evaluationMatchMap.get(matchKey);
         if (!occurrences) return false;
 
-        // Check if this team pair has played in at least one *other* phase (not including currentPhaseId if it's the phase being evaluated).
+        // Vérifier si cette paire d'équipes a joué dans au moins une *autre* phase (sans inclure currentPhaseId si c'est la phase évaluée).
         return Array.from(occurrences).some(phaseId => phaseId !== currentPhaseId);
     }
 
     /**
-     * Displays a modal with details about a repeated match.
-     * @param {string} team1Name Name of the first team.
-     * @param {string} team2Name Name of the second team.
-     * @param {string} team1Id ID of the first team.
-     * @param {string} team2Id ID of the second team.
-     * @param {string} currentPhaseId ID of the current phase (to exclude from the list).
+     * Affiche une modale avec les détails d'un match répété.
+     * @param {string} team1Name Nom de la première équipe.
+     * @param {string} team2Name Nom de la deuxième équipe.
+     * @param {string} team1Id ID de la première équipe.
+     * @param {string} team2Id ID de la deuxième équipe.
+     * @param {string} currentPhaseId ID de la phase actuelle (à exclure de la liste).
      */
     function showRepeatedMatchDetailsModal(team1Name, team2Name, team1Id, team2Id, currentPhaseId) {
         const matchKey = JSON.stringify([team1Id, team2Id].sort());
@@ -404,7 +891,7 @@
         const previousPhases = Array.from(occurrences)
             .filter(phaseId => phaseId !== currentPhaseId) // Exclure la phase actuelle
             .map(phaseId => allBrassagePhases.find(p => p.id === phaseId))
-            .filter(phase => phase !== undefined); // Ensure the phase exists
+            .filter(phase => phase !== undefined); // S'assurer que la phase existe
 
         const modalContent = document.createElement('div');
         modalContent.className = 'text-gray-700';
@@ -436,7 +923,1046 @@
         const lowerCaseNewTeamName = teamName.toLowerCase();
         return allTeams.some(team => team.name.toLowerCase() === lowerCaseNewTeamName);
     }
+    // --- Fonctions de Gestion des Équipes ---
 
+    /**
+     * Ajoute une nouvelle équipe.
+     * @param {string} name - Le nom de l'équipe.
+     * @param {number} level - Le niveau de l'équipe (1-10).
+     */
+    function addTeam(name, level) {
+        if (!name.trim()) {
+            showToast("Le nom de l'équipe ne peut pas être vide.", "error");
+            return;
+        }
+        if (teamExists(name)) { // Utilise la fonction teamExists
+            showToast(`L'équipe "${escapeHtml(name)}" existe déjà. Veuillez choisir un nom différent.`, "error");
+            return;
+        }
+        if (isNaN(level) || level < 1 || level > 10) {
+            showToast("Le niveau doit être un nombre entre 1 et 10.", "error");
+            return;
+        }
+
+        const newTeam = {
+            id: 'team_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+            name: name.trim(),
+            level: level
+        };
+        allTeams.push(newTeam);
+        saveAllData();
+        // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+        showToast(`Équipe "${escapeHtml(name)}" ajoutée avec succès !`, "success");
+    }
+
+    /**
+     * Met à jour le nom et le niveau d'une équipe.
+     * @param {string} id - L'ID de l'équipe à mettre à jour.
+     * @param {string} newName - Le nouveau nom de l'équipe.
+     * @param {number} newLevel - Le nouveau niveau de l'équipe.
+     */
+    function updateTeam(id, newName, newLevel) {
+        if (!newName.trim()) {
+            showToast("Le nom de l'équipe ne peut pas être vide.", "error");
+            return;
+        }
+        if (teamExists(newName) && allTeams.find(t => t.id === id)?.name.toLowerCase() !== newName.toLowerCase()) {
+            showToast(`Une équipe nommée "${escapeHtml(newName)}" existe déjà.`, "error");
+            return;
+        }
+        if (isNaN(newLevel) || newLevel < 1 || newLevel > 10) {
+            showToast("Le niveau doit être un nombre entre 1 et 10.", "error");
+            return;
+        }
+
+        const teamToUpdate = allTeams.find(team => team.id === id);
+        if (teamToUpdate) {
+            teamToUpdate.name = newName.trim();
+            teamToUpdate.level = newLevel;
+            saveAllData();
+            // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+            showToast(`Équipe "${escapeHtml(newName)}" mise à jour.`, "success");
+        } else {
+            showToast("Équipe non trouvée.", "error");
+        }
+    }
+
+    /**
+     * Supprime une équipe.
+     * @param {string} id - L'ID de l'équipe à supprimer.
+     */
+    function deleteTeam(id) {
+        // Vérifier si l'équipe est impliquée dans une phase de brassage ou d'élimination
+        const isTeamInBrassage = allBrassagePhases.some(phase =>
+            phase.pools && phase.pools.some(pool =>
+                pool.teams.some(team => team.id === id) || pool.matches.some(match => match.team1Id === id || match.team2Id === id)
+            )
+        );
+
+        const isTeamInElimination = Object.values(eliminationPhases).some(bracket =>
+            bracket.bracket && bracket.bracket.some(round =>
+                round.matches.some(match => (match.team1 && match.team1.id === id) || (match.team2 && match.team2.id === id))
+            )
+        );
+
+        if (isTeamInBrassage || isTeamInElimination) {
+            const messageContent = document.createElement('p');
+            messageContent.innerHTML = `L'équipe est impliquée dans des phases de tournoi existantes (brassage ou élimination). Vous ne pouvez pas la supprimer.<br><br>Veuillez supprimer les phases concernées d'abord.`;
+            messageContent.className = 'text-gray-700';
+            showModal("Impossible de supprimer l'équipe", messageContent, () => hideModal());
+            return;
+        }
+
+        const teamToDelete = allTeams.find(team => team.id === id);
+        if (!teamToDelete) {
+            showToast("Équipe non trouvée.", "error");
+            return;
+        }
+
+        const messageContent = document.createElement('p');
+        messageContent.textContent = `Êtes-vous sûr de vouloir supprimer l'équipe "${escapeHtml(teamToDelete.name)}" ? Cette action est irréversible.`;
+        messageContent.className = 'text-gray-700';
+
+        showModal('Confirmer la suppression', messageContent, () => {
+            allTeams = allTeams.filter(team => team.id !== id);
+            eliminatedTeams.delete(id); // S'assurer qu'elle est retirée des équipes éliminées si elle y était
+            saveAllData();
+            // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+            showToast(`Équipe "${escapeHtml(teamToDelete.name)}" supprimée.`, "success");
+        }, true);
+    }
+
+    // --- Fonctions de Gestion des Phases de Brassage ---
+
+    /**
+     * Vérifie si une phase de brassage donnée est complète (tous les matchs ont des scores et un vainqueur).
+     * @param {Object} phase The phase object to check.
+     * @returns {boolean} True if the phase is complete, false otherwise.
+     */
+    function isBrassagePhaseComplete(phase) {
+        if (!phase || !phase.generated || !phase.pools) return false;
+        for (const pool of phase.pools) {
+            if (!pool.matches) return false;
+            for (const match of pool.matches) {
+                // Check if score1 and score2 are valid numbers and winnerId is set
+                if (match.score1 === null || match.score2 === null || isNaN(match.score1) || isNaN(match.score2) || match.winnerId === null) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Helper function to generate a single set of pools and evaluate its repetitions.
+     * @param {string} phaseType The type of phase (initial_brassage or secondary_brassage).
+     * @param {Array<Object>} teamsToUse The teams to use for generation.
+     * @param {number} requestedTeamsPerPool The number of teams desired per pool.
+     * @param {HTMLElement} msgElement Element to display messages (for internal generation failures).
+     * @param {string|null} currentPhaseIdToExclude The ID of the phase currently being generated (to exclude from repetition check).
+     * @returns {{pools: Array<Object>|null, repetitions: number, remainingTeamsCount: number}} Object with generated pools, repetition count, and remaining teams.
+     */
+    function generateAndEvaluatePools(phaseType, teamsToUse, requestedTeamsPerPool, msgElement, currentPhaseIdToExclude = null) {
+        let generationResult = null;
+        if (phaseType === PHASE_TYPE_INITIAL) {
+            generationResult = _generatePoolsLogicInitialLevels(teamsToUse, requestedTeamsPerPool, msgElement);
+        } else if (phaseType === PHASE_TYPE_SECONDARY_BRASSAGE) {
+            generationResult = _generatePoolsLogicRankingBased(teamsToUse, requestedTeamsPerPool, msgElement);
+        }
+
+        if (!generationResult || !generationResult.pools) {
+            return { pools: null, repetitions: Infinity, remainingTeamsCount: Infinity };
+        }
+
+        const generatedPools = generationResult.pools;
+
+        // Create a temporary, combined list of phases for evaluation, including the new generated one
+        const phasesForEvaluation = [...allBrassagePhases.filter(p => p.id !== currentPhaseIdToExclude)];
+        
+        // Create a temporary phase representation for the newly generated pools
+        const tempPhaseForEvaluation = {
+            id: currentPhaseIdToExclude || 'temp_phase_for_eval_' + Date.now(),
+            type: phaseType,
+            name: 'Temp Phase for Evaluation',
+            pools: generatedPools,
+            generated: true,
+            timestamp: Date.now() // Use a unique timestamp for uniqueness in the map
+        };
+        phasesForEvaluation.push(tempPhaseForEvaluation);
+
+
+        // Rebuild a temporary match occurrence map including the new pools
+        const tempMatchOccurrenceMap = new Map();
+        phasesForEvaluation.forEach(p => {
+            if (p.generated && p.pools) {
+                p.pools.forEach(pool => {
+                    pool.matches.forEach(match => {
+                        if (match.team1Id && match.team2Id) {
+                            const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
+                            if (!tempMatchOccurrenceMap.has(matchKey)) {
+                                tempMatchOccurrenceMap.set(matchKey, new Set());
+                            }
+                            tempMatchOccurrenceMap.get(matchKey).add(p.id);
+                        }
+                    });
+                });
+            }
+        });
+
+        let currentRepetitions = 0;
+        // Count repetitions specifically within the newly generated pools against ALL OTHER phases
+        tempPhaseForEvaluation.pools.forEach(pool => {
+            pool.matches.forEach(match => {
+                if (match.team1Id && match.team2Id) {
+                    const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
+                    const occurrences = tempMatchOccurrenceMap.get(matchKey);
+                    // A match is a repetition if it occurs in tempPhaseForEvaluation AND in at least one OTHER phase
+                    if (occurrences && occurrences.has(tempPhaseForEvaluation.id) && Array.from(occurrences).some(id => id !== tempPhaseForEvaluation.id)) {
+                         currentRepetitions++;
+                    }
+                }
+            });
+        });
+        
+        return { pools: generatedPools, repetitions: currentRepetitions, remainingTeamsCount: generationResult.remainingTeamsCount };
+    }
+
+
+    /**
+     * Unified function to generate pools for any brassage phase.
+     * @param {string} phaseIdToUpdate ID of the phase whose pools are to be generated.
+     */
+    function generatePoolsForPhase(phaseIdToUpdate) {
+        console.log("--- DEBUG: Entering generatePoolsForPhase ---");
+        console.log(`DEBUG: Requested Phase ID to Update: ${phaseIdToUpdate}`);
+
+        if (allTeams.length === 0) {
+            showToast("Aucune équipe n'a été ajoutée. Veuillez gérer les équipes d'abord.", "error");
+            console.log("DEBUG: No teams available, exiting.");
+            return;
+        }
+
+        const numPoolsInput = document.getElementById('teamsPerPool'); // Get the input element
+        const requestedTeamsPerPool = parseInt(numPoolsInput.value);
+
+        if (isNaN(requestedTeamsPerPool) || requestedTeamsPerPool < 1) {
+            showToast("Veuillez entrer un nombre valide d'équipes par poule (au moins 1).", "error");
+            console.log("DEBUG: Invalid teams per pool (less than 1), exiting.");
+            return;
+        }
+
+        if (requestedTeamsPerPool > 10) {
+            showToast("Le nombre d'équipes par poule ne peut pas dépasser 10 (le niveau maximum des équipes).", "error");
+            console.log("DEBUG: Teams per pool exceeds max level (10), exiting.");
+            return;
+        }
+
+        const phaseToGenerate = allBrassagePhases.find(p => p.id === phaseIdToUpdate);
+        if (!phaseToGenerate) {
+            showToast("Erreur: Phase à générer introuvable.", "error");
+            console.log(`DEBUG: Phase with ID ${phaseIdToUpdate} not found, exiting.`);
+            return;
+        }
+        console.log(`DEBUG: Phase to generate found: ${phaseToGenerate.name} (Type: ${phaseToGenerate.type})`);
+
+        // Get sorted list of actual brassage phases (initial and secondary)
+        const sortedActualBrassagePhases = allBrassagePhases
+            .filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE)
+            .sort((a, b) => a.timestamp - b.timestamp);
+        
+        const currentPhaseIndexInSorted = sortedActualBrassagePhases.findIndex(p => p.id === phaseIdToUpdate);
+        // Check if this is the absolute first brassage phase created by chronological order
+        const isFirstActualBrassagePhaseOverall = currentPhaseIndexInSorted === 0;
+        console.log(`DEBUG: Is this the first *overall* brassage phase? ${isFirstActualBrassagePhaseOverall}`);
+
+        // Get the user's selected pool generation basis directly from radio buttons
+        const basisInitialLevelsRadio = document.getElementById('basisInitialLevels');
+        const basisPreviousResultsRadio = document.getElementById('basisPreviousResults');
+        const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
+        console.log(`DEBUG: User's selected basis from radio buttons: "${selectedBasis}"`);
+
+        let effectiveUseInitialLevels;
+
+        if (isFirstActualBrassagePhaseOverall) {
+            // The very first brassage phase (initial or secondary, though usually initial) MUST use initial levels.
+            effectiveUseInitialLevels = true;
+            showToast("La toute première phase de brassage utilise toujours les niveaux initiaux des équipes.", "info");
+            console.log("DEBUG: This is the first *overall* brassage phase. Forcing effectiveUseInitialLevels = true.");
+        } else if (phaseToGenerate.type === PHASE_TYPE_SECONDARY_BRASSAGE) {
+            // Secondary brassage phases always derive from previous results.
+            effectiveUseInitialLevels = false;
+            console.log("DEBUG: Phase type is SECONDARY_BRASSAGE. Forcing effectiveUseInitialLevels = false.");
+        } else if (phaseToGenerate.type === PHASE_TYPE_INITIAL) {
+            // For subsequent initial brassage phases, respect the user's chosen basis.
+            effectiveUseInitialLevels = (selectedBasis === 'initialLevels');
+            console.log(`DEBUG: Phase type is INITIAL_BRASSAGE (not first overall). EffectiveUseInitialLevels based on selectedBasis: ${effectiveUseInitialLevels}.`);
+        } else {
+            // Fallback for any other unexpected phase type, default to initial levels or throw error
+            effectiveUseInitialLevels = true; // Safe default
+            console.warn(`DEBUG: Unknown phase type encountered (${phaseToGenerate.type}). Defaulting to initial levels.`);
+        }
+
+        console.log(`DEBUG: Final effectiveUseInitialLevels for this generation attempt: ${effectiveUseInitialLevels}`);
+
+        // Now, apply the check for previous results only if the effective method for THIS phase is 'previousResults'
+        if (!effectiveUseInitialLevels) { // This means the effective method for this generation is 'previousResults'
+            const previousBrassagePhase = sortedActualBrassagePhases[currentPhaseIndexInSorted - 1];
+            console.log(`DEBUG: Effective method is 'previousResults'. Checking previous phase completion.`);
+            if (!previousBrassagePhase) {
+                showToast("Erreur logique: La phase précédente est introuvable pour une génération basée sur les résultats.", "error");
+                console.log("DEBUG: Previous phase not found for results-based generation, exiting.");
+                return;
+            }
+            console.log(`DEBUG: Previous phase to check: ${previousBrassagePhase.name} (ID: ${previousBrassagePhase.id})`);
+            if (!isBrassagePhaseComplete(previousBrassagePhase)) {
+                showToast(`Veuillez compléter tous les scores de la phase précédente ("${escapeHtml(previousBrassagePhase.name)}") avant de générer les poules basées sur les résultats.`, "error");
+                console.log(`DEBUG: Previous phase (${previousBrassagePhase.name}) is NOT complete, exiting.`);
+                return;
+            }
+            console.log(`DEBUG: Previous phase (${previousBrassagePhase.name}) IS complete.`);
+        }
+        
+        // Determine the actual teams to use for generation
+        const teamsForGeneration = effectiveUseInitialLevels ? allTeams : (function() {
+            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+            const teamsWithScores = globalRankings.filter(r => r.totalPoints !== 0 || r.totalDiffScore !== 0).map(r => ({
+                id: r.teamObject.id,
+                name: r.teamObject.name,
+                level: r.teamObject.level,
+                totalPoints: r.totalPoints,
+                totalDiffScore: r.totalDiffScore
+            }));
+            // If there are no teams with scores, fall back to all teams but warn
+            if (teamsWithScores.length === 0 && !isFirstActualBrassagePhaseOverall) {
+                showToast("Aucune équipe avec des scores enregistrés pour générer des poules basées sur les résultats précédents. Les niveaux initiaux seront utilisés.", "error");
+                console.log("DEBUG: No teams with scores for results-based generation, falling back to all teams.");
+                return allTeams; // Fallback
+            }
+            console.log(`DEBUG: Teams for generation based on scores (${teamsWithScores.length} teams):`, teamsWithScores.map(t => `${t.name} (Pts: ${t.totalPoints}, Diff: ${t.totalDiffScore})`).join(', '));
+            return teamsWithScores.length > 0 ? teamsWithScores : allTeams; // Use teamsWithScores if available, else allTeams
+        })();
+
+        if (teamsForGeneration.length === 0) {
+             showToast("Aucune équipe disponible pour générer des poules.", "error");
+             console.log("DEBUG: No teams for generation, exiting.");
+             return;
+        }
+        if (teamsForGeneration.length < requestedTeamsPerPool) {
+            showToast(`Pas assez d'équipes (${teamsForGeneration.length}) pour former des poules de ${requestedTeamsPerPool} équipes. Réduisez le nombre d'équipes par poule ou ajoutez des équipes.` + (effectiveUseInitialLevels ? "" : " Assurez-vous d'avoir suffisamment d'équipes avec des scores valides."), "error");
+            console.log("DEBUG: Not enough teams for requested pools, exiting.");
+            return;
+        }
+
+
+        const MAX_ATTEMPTS = 20; // Number of times to try generating pools
+        let bestPools = null;
+        let minRepetitions = Infinity;
+        let bestRemainingTeamsCount = Infinity;
+        console.log(`DEBUG: Starting pool generation attempts (max ${MAX_ATTEMPTS})...`);
+
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+            // Generate and evaluate potential pools
+            const result = generateAndEvaluatePools(phaseToGenerate.type, teamsForGeneration, requestedTeamsPerPool, null, phaseIdToUpdate); // Pass null for msgElement to avoid duplicate toasts
+            
+            if (result.pools) {
+                // Prioritize fewer repetitions, then fewer remaining teams
+                if (result.repetitions < minRepetitions) {
+                    minRepetitions = result.repetitions;
+                    bestPools = result.pools;
+                    bestRemainingTeamsCount = result.remainingTeamsCount;
+                } else if (result.repetitions === minRepetitions && result.remainingTeamsCount < bestRemainingTeamsCount) {
+                    // If repetitions are the same, prefer fewer unassigned teams
+                    minRepetitions = result.repetitions; // Redundant but for clarity
+                    bestPools = result.pools;
+                    bestRemainingTeamsCount = result.remainingTeamsCount;
+                }
+                
+                // If we found a perfect solution (0 repetitions), no need to try further
+                if (minRepetitions === 0 && bestRemainingTeamsCount === 0) { // Also ensure all teams assigned
+                     console.log(`DEBUG: Optimal solution found in ${attempt + 1} attempts.`);
+                     break;
+                }
+            }
+        }
+
+        if (!bestPools) {
+            showToast("Impossible de générer des poules valides après plusieurs tentatives. Vérifiez le nombre d'équipes et les paramètres.", "error");
+            console.log("DEBUG: Failed to generate valid pools after all attempts, exiting.");
+            return;
+        }
+
+        const phaseIndex = allBrassagePhases.findIndex(p => p.id === phaseIdToUpdate);
+        if (phaseIndex > -1) {
+            allBrassagePhases[phaseIndex].pools = bestPools;
+            allBrassagePhases[phaseIndex].generated = true; 
+            saveAllData();
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData
+            // renderPhaseHistory();
+            // renderPoolsWithCurrentSettings(bestPools, allBrassagePhases[phaseIndex].name, phaseIdToUpdate);
+
+            let successMessage = bestPools.length + " poule(s) générée(s) avec succès pour cette phase ! ";
+            if (minRepetitions > 0) {
+                successMessage += `Ceci a entraîné ${minRepetitions} rencontre(s) répétée(s) (minimum trouvé après ${MAX_ATTEMPTS} tentatives).`;
+            } else {
+                successMessage += `Aucune rencontre répétée détectée dans cette phase.`;
+            }
+            if (bestRemainingTeamsCount > 0) {
+                successMessage += ` ${bestRemainingTeamsCount} équipe(s) n'ont pas pu être assignée(s) à une poule.`;
+            }
+            showToast(successMessage, "success");
+            console.log("DEBUG: Pool generation successful.");
+        } else {
+            showToast("Erreur: Phase à générer introuvable après les vérifications.", "error");
+            console.log("DEBUG: Phase not found after final checks, exiting.");
+        }
+        console.log("--- DEBUG: Exiting generatePoolsForPhase ---");
+    }
+
+    /**
+     * Logic to generate pools based on initial team levels.
+     * @param {Array<Object>} teamsToUse The teams to use for generation.
+     * @param {number} requestedTeamsPerPool The number of teams desired per pool.
+     * @param {HTMLElement} msgElement Element to display messages.
+     * @returns {Object|null} Object containing generated pools and remaining teams count, or null on failure.
+     */
+    function _generatePoolsLogicInitialLevels(teamsToUse, requestedTeamsPerPool, msgElement) {
+        const teamsByExactLevel = new Map();
+        for (let i = 1; i <= 10; i++) {
+            teamsByExactLevel.set(i, shuffleArray(teamsToUse.filter(team => team.level === i)));
+        }
+
+        let maxPoolsThatCanBeFormed = Infinity;
+        let requiredLevelsPresent = true;
+
+        for (let level = 1; level <= requestedTeamsPerPool; level++) {
+            const teamsAtLevel = teamsByExactLevel.get(level);
+            if (!teamsAtLevel || teamsAtLevel.length === 0) {
+                requiredLevelsPresent = false;
+                // showToast(`Impossible de former des poules de ${requestedTeamsPerPool} équipes: il manque des équipes de niveau ${level}.`, "error");
+                return null;
+            }
+            maxPoolsThatCanBeFormed = Math.min(maxPoolsThatCanBeFormed, teamsAtLevel.length);
+        }
+
+        if (!requiredLevelsPresent) return null;
+
+        const generatedPools = [];
+        for (let i = 0; i < maxPoolsThatCanBeFormed; i++) {
+            const poolName = String.fromCharCode(65 + i);
+            const pool = {
+                id: 'pool_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+                name: "Poule " + poolName,
+                teams: [],
+                matches: []
+            };
+
+            for (let level = 1; level <= requestedTeamsPerPool; level++) {
+                pool.teams.push(teamsByExactLevel.get(level).pop());
+            }
+
+            for (let t1_idx = 0; t1_idx < pool.teams.length; t1_idx++) {
+                for (let t2_idx = t1_idx + 1; t2_idx < pool.teams.length; t2_idx++) {
+                    pool.matches.push({
+                        team1Id: pool.teams[t1_idx].id,
+                        team1Name: pool.teams[t1_idx].name,
+                        team2Id: pool.teams[t2_idx].id,
+                        team2Name: pool.teams[t2_idx].name,
+                        score1: null,
+                        score2: null,
+                        winnerId: null
+                    });
+                }
+            }
+            generatedPools.push(pool);
+        }
+
+        let allRemainingTeams = [];
+        teamsByExactLevel.forEach(teamsAtLevel => {
+            allRemainingTeams.push(...teamsAtLevel);
+        });
+        allRemainingTeams = shuffleArray(allRemainingTeams);
+
+        let currentPoolIdxForRemaining = 0;
+        while (allRemainingTeams.length > 0 && generatedPools.length > 0) {
+            if (generatedPools.length === 0) break;
+
+            const pool = generatedPools[currentPoolIdxForRemaining];
+            const teamToAdd = allRemainingTeams.pop();
+
+            if (!pool.teams.some(t => t.id === teamToAdd.id)) { // Prevent adding same team multiple times
+                pool.teams.push(teamToAdd);
+                // Add new matches with the newly added team against existing teams in the pool
+                pool.teams.filter(t => t.id !== teamToAdd.id).forEach(existingTeam => {
+                    pool.matches.push({
+                        team1Id: teamToAdd.id,
+                        team1Name: teamToAdd.name,
+                        team2Id: existingTeam.id,
+                        team2Name: existingTeam.name,
+                        score1: null, score2: null, winnerId: null
+                    });
+                });
+            }
+            currentPoolIdxForRemaining = (currentPoolIdxForRemaining + 1) % generatedPools.length;
+        }
+        return { pools: generatedPools, remainingTeamsCount: allRemainingTeams.length };
+    }
+
+    /**
+     * Génère des poules basées sur le classement global, en essayant de minimiser les rencontres répétées.
+     * @param {Array<Object>} teamsForThisGroup Les équipes du groupe actuel, avec leurs totaux de points/diff.
+     * @param {number} requestedTeamsPerPool Le nombre d'équipes souhaité par poule.
+     * @param {HTMLElement} msgElement L'élément pour afficher les messages.
+     * @returns {Object|null} Les poules générées et le nombre d'équipes restantes, ou null en cas d'échec.
+     */
+    function _generatePoolsLogicRankingBased(teamsForThisGroup, requestedTeamsPerPool, msgElement) {
+        if (teamsForThisGroup.length === 0) {
+            // showToast("Aucune équipe disponible pour former les poules dans ce groupe.", "error");
+            return null;
+        }
+
+        const numInternalTiers = requestedTeamsPerPool; // Représente combien de niveaux nous divisons les équipes en
+        const totalTeamsInGroup = teamsForThisGroup.length;
+
+        if (numInternalTiers < 1) {
+            // showToast("Le nombre d'équipes par poule doit être au moins 1.", "error");
+            return null;
+        }
+
+        // Trier les équipes au sein du groupe par leur classement (points, puis différence de score)
+        const sortedTeamsWithinGroup = [...teamsForThisGroup].sort((a, b) => b.totalPoints - a.totalPoints || b.totalDiffScore - a.totalDiffScore);
+
+        const teamsGroupedByInternalTier = new Map();
+        for(let i = 0; i < numInternalTiers; i++) {
+            teamsGroupedByInternalTier.set(i, []);
+        }
+
+        // Distribuer les équipes de manière égale dans `numInternalTiers` en fonction de leur ordre trié
+        for (let i = 0; i < totalTeamsInGroup; i++) {
+            const tierIndex = i % numInternalTiers; // Distribution en serpentin dans les niveaux
+            teamsGroupedByInternalTier.get(tierIndex).push(sortedTeamsWithinGroup[i]);
+        }
+
+        // Déterminer le nombre de poules en fonction de la plus petite taille de niveau
+        let minTierSize = Infinity;
+        const tierKeys = Array.from(teamsGroupedByInternalTier.keys()).sort((a,b)=>a-b);
+
+        for (const tier of tierKeys) {
+            const teamsInThisTier = teamsGroupedByInternalTier.get(tier);
+            minTierSize = Math.min(minTierSize, teamsInThisTier.length);
+        }
+
+        if (minTierSize === 0 || minTierSize === Infinity || minTierSize < 1) {
+            // showToast(`Pas assez d'équipes pour former des poules équilibrées de ${requestedTeamsPerPool} équipes à partir de ce groupe. Réduisez le nombre d'équipes par poule ou ajoutez des équipes.`, "error");
+            return null;
+        }
+
+        const numberOfPools = minTierSize;
+        const generatedPools = [];
+
+        // Générer des décalages aléatoires pour chaque niveau afin de diversifier les compositions de poules
+        // C'est le changement principal pour minimiser les répétitions : chaque niveau commencera sa sélection d'équipe
+        // à partir d'un point différent, en tournant à travers ses membres pour chaque poule.
+        const tierOffsets = shuffleArray(Array.from({length: numInternalTiers}, (_, k) => k));
+
+        for (let i = 0; i < numberOfPools; i++) {
+            const poolName = String.fromCharCode(65 + i);
+            const pool = {
+                id: 'pool_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+                name: "Poule " + poolName,
+                teams: [],
+                matches: []
+            };
+
+            for (const tier of tierKeys) {
+                const teamsInThisTier = teamsGroupedByInternalTier.get(tier);
+                // Appliquer le décalage pour choisir l'équipe du niveau, en s'assurant de revenir au début si l'index dépasse la longueur
+                const actualIndex = (i + tierOffsets[tier]) % teamsInThisTier.length;
+                
+                if (teamsInThisTier && teamsInThisTier[actualIndex]) {
+                    // Nous devons passer l'objet équipe complet ici, pas seulement l'ID/le nom.
+                    // Les `teamsForThisGroup` contiennent déjà les objets équipe originaux et leurs scores calculés.
+                    const originalTeam = allTeams.find(t => t.id === teamsInThisTier[actualIndex].id);
+                    if (originalTeam) {
+                        pool.teams.push({
+                            ...originalTeam, // Propriétés de l'équipe originale (id, nom, niveau)
+                            totalPoints: teamsInThisTier[actualIndex].totalPoints, // Points calculés
+                            totalDiffScore: teamsInThisTier[actualIndex].totalDiffScore // Différence de score calculée
+                        });
+                    } else {
+                        console.warn(`Original team data not found for ID: ${teamsInThisTier[actualIndex].id}`);
+                        pool.teams.push(teamsInThisTier[actualIndex]); // Fallback vers les données partielles
+                    }
+                    
+                } else {
+                    console.warn(`ATTENTION: Tentative de prendre une équipe de tiers vide ou hors limite pour la poule ${pool.name}, tier ${tier}, index ${actualIndex}.`);
+                }
+            }
+
+            shuffleArray(pool.teams); // Mélanger les équipes dans la poule après la sélection
+
+            // Générer les matchs pour cette poule (tous contre tous)
+            for (let t1_idx = 0; t1_idx < pool.teams.length; t1_idx++) {
+                for (let t2_idx = t1_idx + 1; t2_idx < pool.teams.length; t2_idx++) {
+                    pool.matches.push({
+                        team1Id: pool.teams[t1_idx].id,
+                        team1Name: pool.teams[t1_idx].name,
+                        team2Id: pool.teams[t2_idx].id,
+                        team2Name: pool.teams[t2_idx].name,
+                        score1: null,
+                        score2: null,
+                        winnerId: null
+                    });
+                }
+            }
+            generatedPools.push(pool);
+        }
+
+        let remainingTeamsCount = 0;
+        // Calculer les équipes restantes (celles qui ne sont utilisées dans aucune poule)
+        teamsGroupedByInternalTier.forEach(group => {
+            remainingTeamsCount += (group.length - numberOfPools);
+        });
+
+        return { pools: generatedPools, remainingTeamsCount: remainingTeamsCount };
+    }
+
+    /**
+     * Renommage de la fonction `previewSecondaryGroups` en `_performSecondaryGroupsPreview`
+     * et ajout d'un wrapper `previewSecondaryGroups` pour la modale d'avertissement.
+     */
+    function _performSecondaryGroupsPreview() {
+        const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+        const secondaryGroupsPreviewDisplay = document.getElementById('secondaryGroupsPreviewDisplay');
+        const validateSecondaryGroupsBtn = document.getElementById('validateSecondaryGroupsBtn');
+        const generateSecondaryBrassagesBtn = document.getElementById('generateSecondaryBrassagesBtn');
+        const refreshSecondaryGroupScoresBtn = document.getElementById('refreshSecondaryGroupScoresBtn');
+
+        const numGroups = parseInt(numberOfSecondaryGroupsInput.value);
+        if (isNaN(numGroups) || (numGroups !== 2 && numGroups !== 3)) {
+            showToast("Veuillez choisir 2 ou 3 groupes de niveau pour la création.", "error");
+            secondaryGroupsPreviewDisplay.innerHTML = '';
+            validateSecondaryGroupsBtn.classList.add('hidden');
+            generateSecondaryBrassagesBtn.classList.add('hidden');
+            refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
+            currentSecondaryGroupsPreview = {}; // Clear preview if invalid selection
+            saveAllData();
+            return;
+        }
+
+        const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+        if (globalRankings.length === 0) {
+            showToast("Aucune équipe classée disponible pour créer les groupes. Générez et terminez des phases de brassage initiales d'abord.", "error");
+            secondaryGroupsPreviewDisplay.innerHTML = '';
+            validateSecondaryGroupsBtn.classList.add('hidden');
+            generateSecondaryBrassagesBtn.classList.add('hidden');
+            refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
+            currentSecondaryGroupsPreview = {}; // Clear preview if no rankings
+            saveAllData();
+            return;
+        }
+
+        currentSecondaryGroupsPreview = {}; // Reset for new preview
+        const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+        const selectedGroupNames = groupNamesMap[numGroups];
+
+        const teamsToDistribute = [...globalRankings];
+        const totalTeams = teamsToDistribute.length;
+        const baseGroupSize = Math.floor(totalTeams / numGroups);
+        let remainder = totalTeams % numGroups;
+        let currentTeamIndex = 0;
+
+        for (let i = 0; i < numGroups; i++) {
+            const groupName = selectedGroupNames[i];
+            currentSecondaryGroupsPreview[groupName] = [];
+            const currentSize = baseGroupSize + (remainder > 0 ? 1 : 0);
+            if (remainder > 0) remainder--;
+
+            for (let j = 0; j < currentSize; j++) {
+                if (teamsToDistribute[currentTeamIndex]) {
+                    const teamForPreview = {
+                        ...teamsToDistribute[currentTeamIndex].teamObject,
+                        totalPoints: teamsToDistribute[currentTeamIndex].totalPoints,
+                        totalDiffScore: teamsToDistribute[currentTeamIndex].totalDiffScore,
+                        previewGroup: groupName
+                    };
+                    currentSecondaryGroupsPreview[groupName].push(teamForPreview);
+                }
+                currentTeamIndex++;
+            }
+        }
+
+        renderSecondaryGroupsPreview(selectedGroupNames);
+        saveAllData(); // Save the newly generated preview
+        showToast(`Création des ${numGroups} groupes de niveau terminée. Ajustez si nécessaire.`, "success");
+    }
+
+    /**
+     * NOUVELLE FONCTION: Affiche une modale avec les options pour une équipe spécifique.
+     * Permet de déplacer l'équipe ou de changer son statut d'élimination.
+     * @param {string} teamId L'ID de l'équipe.
+     * @param {string} teamName Le nom de l'équipe.
+     * @param {number} totalPoints Les points totaux de l'équipe.
+     * @param {number} totalDiffScore La différence de score totale de l'équipe.
+     * @param {string} currentGroup Le groupe actuel de l'équipe.
+     * @param {Array<string>} allGroupNames Tous les noms de groupes possibles.
+     */
+    function showTeamOptionsModal(teamId, teamName, totalPoints, totalDiffScore, currentGroup, allGroupNames) {
+        const isCurrentlyEliminated = eliminatedTeams.has(teamId);
+        const teamStatusText = isCurrentlyEliminated ? 'Actuellement **Éliminée**' : 'Actuellement **En Jeu**';
+        const toggleEliminationAction = isCurrentlyEliminated ? 'Remettre en jeu' : 'Éliminer';
+        const toggleEliminationColor = isCurrentlyEliminated ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700';
+
+        const modalContentDiv = document.createElement('div');
+        modalContentDiv.className = 'space-y-4 text-gray-700';
+        modalContentDiv.innerHTML = `
+            <p class="text-md">Options pour <span class="font-bold">${escapeHtml(teamName)}</span> (Pts: ${totalPoints}, Diff: ${totalDiffScore})</p>
+            <p class="text-sm font-semibold">${teamStatusText}</p>
+            <div class="flex flex-col space-y-2 mt-4">
+                <button id="moveTeamOptionBtn" class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition ease-in-out duration-150">
+                    Déplacer l'équipe dans un autre groupe
+                </button>
+                <button id="toggleEliminationOptionBtn" class="${toggleEliminationColor} text-white py-2 px-4 rounded-md transition ease-in-out duration-150">
+                    ${toggleEliminationAction} cette équipe
+                </button>
+            </div>
+        `;
+
+        // On ne passe pas de confirmCallback directe à showModal ici,
+        // car les boutons de la modale interne auront leurs propres callbacks.
+        // On utilise une modale "neutre" pour le conteneur.
+        showModal(`Gérer l'équipe : ${escapeHtml(teamName)}`, modalContentDiv, () => { /* Aucune action par défaut */ });
+
+        document.getElementById('moveTeamOptionBtn').addEventListener('click', () => {
+            hideModal(); // Cacher la modale d'options
+            showMoveTeamModal(teamId, teamName, currentGroup, totalPoints, totalDiffScore, allGroupNames);
+        });
+
+        document.getElementById('toggleEliminationOptionBtn').addEventListener('click', () => {
+            if (eliminatedTeams.has(teamId)) {
+                eliminatedTeams.delete(teamId);
+                showToast(`${escapeHtml(teamName)} remise en jeu.`, "info");
+            } else {
+                eliminatedTeams.add(teamId);
+                showToast(`${escapeHtml(teamName)} éliminée.`, "info");
+            }
+            saveAllData();
+            // Re-render la prévisualisation des groupes secondaires pour que les changements soient visibles
+            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+            const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+            renderSecondaryGroupsPreview(groupNamesMap[parseInt(numberOfSecondaryGroupsInput.value)]);
+            hideModal(); // Cacher la modale après l'action
+        });
+
+        // Ajuster les boutons de la modale principale pour qu'ils ne fassent rien
+        // lorsque cette modale d'options est ouverte.
+        // La "confirmCallback" passée à showModal était déjà vide, donc pas de conflit ici.
+        // Le bouton de confirmation de showModal restera visible mais inactif si aucune action n'y est assignée.
+        // On s'assure qu'il n'exécute rien de la modale parente.
+        modalConfirmBtn.onclick = () => hideModal(); // Just hide the modal if the main confirm is clicked
+        modalCancelBtn.onclick = () => hideModal(); // Just hide the modal if the main cancel is clicked
+    }
+
+    /**
+     * Affiche une modale pour déplacer une équipe entre les groupes secondaires.
+     * @param {string} teamId L'ID de l'équipe à déplacer.
+     * @param {string} teamName Le nom de l'équipe.
+     * @param {string} currentGroup Le groupe actuel de l'équipe.
+     * @param {number} totalPoints Les points totaux de l'équipe.
+     * @param {number} totalDiffScore La différence de score totale de l'équipe.
+     * @param {Array<string>} allGroupNames Tous les noms de groupes possibles.
+     */
+    function showMoveTeamModal(teamId, teamName, currentGroup, totalPoints, totalDiffScore, allGroupNames) {
+        const formDiv = document.createElement('div');
+        formDiv.className = 'space-y-4';
+        formDiv.innerHTML = `
+            <p class="text-gray-700">Déplacer l'équipe <span class="font-bold">${escapeHtml(teamName)}</span> (Pts: ${totalPoints}, Diff: ${totalDiffScore}) :</p>
+            <div>
+                <label for="moveTeamGroupSelect" class="block text-sm font-medium text-gray-700 mb-1">Nouveau groupe :</label>
+                <select id="moveTeamGroupSelect"
+                        class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                </select>
+            </div>
+            <p id="moveModalMessage" class="text-sm text-center"></p>
+        `;
+        const groupSelect = formDiv.querySelector('#moveTeamGroupSelect');
+
+        allGroupNames.forEach(groupName => {
+            const option = document.createElement('option');
+            option.value = groupName;
+            option.textContent = groupName;
+            if (groupName === currentGroup) {
+                option.selected = true;
+            }
+            groupSelect.appendChild(option);
+        });
+
+        showModal('Déplacer l\'équipe', formDiv, async () => {
+            const newGroup = groupSelect.value;
+            const moveModalMessage = document.getElementById('moveModalMessage');
+
+            if (newGroup === currentGroup) {
+                return; // hideModal is handled by showModal's callback
+            }
+
+            moveTeamBetweenSecondaryGroups(teamId, currentGroup, newGroup);
+        });
+    }
+
+    /**
+     * Déplace une équipe entre deux groupes secondaires.
+     * @param {string} teamId L'ID de l'équipe à déplacer.
+     * @param {string} fromGroup Le nom du groupe d'origine.
+     * @param {string} toGroup Le nom du groupe de destination.
+     */
+    function moveTeamBetweenSecondaryGroups(teamId, fromGroup, toGroup) {
+        if (fromGroup === toGroup) return;
+
+        let teamToMove = null;
+        currentSecondaryGroupsPreview[fromGroup] = currentSecondaryGroupsPreview[fromGroup].filter(team => {
+            if (team.id === teamId) {
+                teamToMove = team;
+                return false;
+            }
+            return true;
+        });
+
+        if (teamToMove) {
+            teamToMove.previewGroup = toGroup;
+            if (!currentSecondaryGroupsPreview[toGroup]) {
+                currentSecondaryGroupsPreview[toGroup] = [];
+            }
+            currentSecondaryGroupsPreview[toGroup].push(teamToMove);
+
+            // Re-sort the destination group to maintain rank order for display/future logic
+            currentSecondaryGroupsPreview[toGroup].sort((a, b) => b.totalPoints - a.totalPoints || b.totalDiffScore - a.totalDiffScore);
+
+            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+            const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+            renderSecondaryGroupsPreview(groupNamesMap[parseInt(numberOfSecondaryGroupsInput.value)]);
+            saveAllData(); // Save the state after manual move
+            showToast(`Équipe ${escapeHtml(teamToMove.name)} déplacée vers ${escapeHtml(toGroup)}.`, "success");
+
+        } else {
+            console.error("ERROR: Team not found for movement:", teamId);
+        }
+    }
+
+    /**
+     * Valide la composition actuelle des groupes secondaires pour les phases éliminatoires.
+     * Crée une phase spéciale de type `elimination_seeding`.
+     */
+    function validateSecondaryGroupsForElimination() {
+        const messageContent = document.createElement('p');
+        messageContent.textContent = "Confirmer la composition actuelle des groupes pour les phases éliminatoires ? Cette action enregistre ce regroupement.";
+        messageContent.className = 'text-gray-700';
+
+        showModal('Valider les Groupes', messageContent, () => {
+            if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
+                showToast("Aucun groupe à valider. Créez les groupes d'abord.", "error");
+                return; // hideModal is handled by showModal's callback
+            }
+
+            // Remove only existing elimination seeding phases to avoid duplicates if re-validating
+            allBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING);
+
+            const eliminationSeedingPhase = {
+                id: `${PHASE_TYPE_ELIMINATION_SEEDING}_${Date.now()}`,
+                type: PHASE_TYPE_ELIMINATION_SEEDING, // Ensure type is correct
+                name: `Répartition Éliminatoire Validée (${new Date().toLocaleDateString('fr-FR')})`,
+                timestamp: Date.now(),
+                groupedTeams: JSON.parse(JSON.stringify(currentSecondaryGroupsPreview)), // Deep copy
+                generated: true // Mark as generated/validated
+            };
+            allBrassagePhases.push(eliminationSeedingPhase);
+            saveAllData();
+            showToast("Répartition des groupes validée et enregistrée pour les éliminatoires !", "success");
+        });
+    }
+
+    /**
+     * NOUVELLE FONCTION : Validation directe pour l'élimination.
+     * Crée une phase de type `elimination_seeding` avec toutes les équipes éligibles dans un seul groupe.
+     */
+    async function validateForDirectElimination() {
+        const messageContent = document.createElement('p');
+        messageContent.innerHTML = `
+            Êtes-vous sûr de vouloir valider toutes les équipes (non éliminées)
+            pour la phase éliminatoire en vous basant sur le classement général ?
+            <br>
+            **Attention :** Cette action écrasera toute configuration de groupes secondaires préalablement validée
+            et passera les équipes sélectionnées à l'étape éliminatoire principale.
+        `;
+        messageContent.className = 'text-gray-700';
+
+        showModal('Confirmer la validation directe pour l\'élimination', messageContent, async () => {
+            if (allTeams.length === 0) {
+                showToast("Aucune équipe enregistrée. Veuillez ajouter des équipes d'abord.", "error");
+                return;
+            }
+
+            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+            if (globalRankings.length === 0) {
+                showToast("Aucune équipe classée disponible. Veuillez générer et terminer des phases de brassage d'abord.", "error");
+                return;
+            }
+
+            // Filter out eliminated teams from the rankings
+            const eligibleTeams = globalRankings.filter(rankEntry => !eliminatedTeams.has(rankEntry.teamObject.id));
+
+            if (eligibleTeams.length === 0) {
+                showToast("Aucune équipe éligible (non éliminée) trouvée pour la phase éliminatoire.", "info");
+                return;
+            }
+
+            // Create a single group for all eligible teams
+            const directEliminationGroup = {
+                "Principale": eligibleTeams.map(r => ({
+                    ...r.teamObject, // Original team properties (id, nom, level)
+                    totalPoints: r.totalPoints, // Calculated points
+                    totalDiffScore: r.totalDiffScore, // Calculated diff score
+                    previewGroup: "Principale" // Indicate they belong to the main group
+                }))
+            };
+            
+            // Clear any existing secondary groups preview data
+            currentSecondaryGroupsPreview = {}; 
+            await saveAllData(); // Save cleared preview
+
+            // Remove only existing elimination seeding phases to avoid duplicates if re-validating
+            allBrassagePhases = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING);
+
+            const eliminationSeedingPhase = {
+                id: `${PHASE_TYPE_ELIMINATION_SEEDING}_${Date.now()}_direct`,
+                type: PHASE_TYPE_ELIMINATION_SEEDING,
+                name: `Validation Élimination Directe (${new Date().toLocaleDateString('fr-FR')})`,
+                timestamp: Date.now(),
+                groupedTeams: directEliminationGroup, // Use the single main group
+                generated: true
+            };
+
+            allBrassagePhases.push(eliminationSeedingPhase);
+            await saveAllData();
+            showToast("Toutes les équipes éligibles validées pour l'élimination directe !", "success");
+            window.location.hash = '#eliminatoires'; // Redirect to elimination page
+        }, true); // Use red style for confirmation as it overwrites
+    }
+
+
+    /**
+     * Génère les phases de brassage secondaires basées sur les groupes prévisualisés.
+     */
+    async function generateSecondaryBrassagePhases() {
+        console.log("DEBUG: Lancement de generateSecondaryBrassagePhases...");
+
+        const numPoolsInput = document.getElementById('teamsPerPool');
+        const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+        const secondaryPreviewMessage = document.getElementById('secondaryPreviewMessage');
+
+        const teamsPerPoolForNewPhases = parseInt(numPoolsInput.value);
+
+        if (isNaN(teamsPerPoolForNewPhases) || teamsPerPoolForNewPhases < 1) {
+            showToast("Veuillez entrer un nombre valide d'équipes par poule (au moins 1) pour les phases secondaires.", "error");
+            return;
+        }
+
+        if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
+            showToast("Veuillez d'abord créer les groupes de brassage secondaires.", "error");
+            return;
+        }
+
+        const newPhases = [];
+        const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+        const numGroups = parseInt(numberOfSecondaryGroupsInput.value);
+        const selectedGroupNames = groupNamesMap[numGroups];
+
+        let generationFailed = false;
+
+        for (const groupName of selectedGroupNames) {
+            const teamsInThisGroup = currentSecondaryGroupsPreview[groupName];
+            console.log(`DEBUG: Traitement du groupe: ${groupName} avec ${teamsInThisGroup ? teamsInThisGroup.length : 0} équipes.`);
+
+            if (!teamsInThisGroup || teamsInThisGroup.length < teamsPerPoolForNewPhases) {
+                showToast(`Le groupe "${escapeHtml(groupName)}" n'a pas assez d'équipes pour former des poules de ${teamsPerPoolForNewPhases} équipes. (${teamsInGroup.length} équipes disponibles)`, "error");
+                generationFailed = true;
+                break;
+            }
+            // Use the retry logic for secondary brassage generation too
+            const MAX_ATTEMPTS = 20;
+            let bestResult = null;
+            let minReps = Infinity;
+            let bestRemCount = Infinity;
+
+            for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+                const result = generateAndEvaluatePools(PHASE_TYPE_SECONDARY_BRASSAGE, teamsInThisGroup, teamsPerPoolForNewPhases, secondaryPreviewMessage);
+                if (result.pools) {
+                    if (result.repetitions < minReps) {
+                        minReps = result.repetitions;
+                        bestResult = result;
+                    } else if (result.repetitions === minReps && result.remainingTeamsCount < bestRemCount) {
+                        minReps = result.repetitions; // Redundant but for clarity
+                        bestResult = result;
+                    }
+                    if (minReps === 0 && bestRemCount === 0) break;
+                }
+            }
+
+            if (bestResult && bestResult.pools.length > 0) {
+                const newPhase = {
+                    id: `${PHASE_TYPE_SECONDARY_BRASSAGE}_${Date.now()}_${groupName.replace(/\s/g, '_')}`,
+                    type: PHASE_TYPE_SECONDARY_BRASSAGE,
+                    name: `Brassage ${groupName}`, // Nom sans la date
+                    pools: bestResult.pools,
+                    generated: true,
+                    timestamp: Date.now() + newPhases.length // Ensure unique timestamp for ordering
+                };
+                newPhases.push(newPhase);
+            } else {
+                showToast(`Impossible de générer des poules pour le groupe ${escapeHtml(groupName)}. Vérifiez si vous avez suffisamment d'équipes dans ce groupe pour les poules de ${teamsPerPoolForNewPhases} équipes.`, "error");
+                generationFailed = true;
+                break;
+            }
+        }
+
+        if (!generationFailed && newPhases.length > 0 && newPhases.length === numGroups) {
+            allBrassagePhases.push(...newPhases);
+            await saveAllData();
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData
+            // renderPhaseHistory();
+            // renderPoolsWithCurrentSettings(newPhases[0].pools, newPhases[0].name, newPhases[0].id);
+            showToast(`${newPhases.length} phases de brassage secondaires générées avec succès !`, "success");
+        } else if (generationFailed) {
+            console.error("ERREUR: La génération des phases supplémentaires a échoué pour au moins un groupe.");
+        } else {
+            showToast("Aucune phase de brassage secondaire n'a pu être générée. Vérifiez vos paramètres et le classement actuel.", "error");
+            console.error("ERREUR: Aucune phase secondaire n'a été générée malgré aucune erreur explicite.");
+        }
+    }
+
+    /**
+     * Supprime toutes les phases de brassage (initiales et secondaires).
+     */
+    async function clearAllPhases() {
+        const messageContent = document.createElement('p');
+        messageContent.textContent = "Êtes-vous sûr de vouloir supprimer TOUTES les phases de brassage (initiales et secondaires) ? Cette action est irréversible.";
+        messageContent.className = 'text-gray-700';
+
+        showModal('Confirmer la suppression de toutes les phases', messageContent, async () => {
+            allBrassagePhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING); // Keep only seeding phases
+            currentSecondaryGroupsPreview = {}; // Clear secondary groups preview
+            await saveAllData();
+
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData
+            // renderPhaseHistory();
+            // poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
+            // currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
+            // currentDisplayedPhaseId = null;
+            // secondaryGroupsPreviewDisplay.innerHTML = '<p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Créer les groupes".</p>';
+            // validateSecondaryGroupsBtn.classList.add('hidden');
+            // generateSecondaryBrassagesBtn.classList.add('hidden');
+            // refreshSecondaryGroupScoresBtn.classList.add('hidden');
+            showToast("Toutes les phases de brassage ont été supprimées.", "success");
+        }, true); // Use red style for confirmation button
+    }
     // --- Logique du Classement (partagée) ---
 
     /**
@@ -451,17 +1977,17 @@
                 teamObject: team,
                 totalPoints: 0,
                 totalDiffScore: 0,
-                detailsByPhase: {} // To store points/diff for each phase individually
+                detailsByPhase: {} // Pour stocker les points/diff pour chaque phase individuellement
             });
         });
 
         brassagePhases.forEach(phase => {
             // Seulement compter les scores des phases de brassage initiales et secondaires
             if ((phase.type === PHASE_TYPE_INITIAL || phase.type === PHASE_TYPE_SECONDARY_BRASSAGE) && phase.generated && phase.pools) {
-                // Initialize phase details for all teams for this phase
+                // Initialiser les détails de phase pour toutes les équipes pour cette phase
                 teams.forEach(team => {
                     const teamStats = rankings.get(team.id);
-                    if (teamStats) { // Ensure teamStats exists
+                    if (teamStats) { // S'assurer que teamStats existe
                         if (!teamStats.detailsByPhase[phase.id]) {
                             teamStats.detailsByPhase[phase.id] = { points: 0, diffScore: 0 };
                         }
@@ -479,7 +2005,7 @@
                                 const team1Stats = rankings.get(match.team1Id);
                                 const team2Stats = rankings.get(match.team2Id);
 
-                                // Update global totals
+                                // Mettre à jour les totaux globaux
                                 if (team1Stats) {
                                     team1Stats.totalDiffScore += (score1 - score2);
                                     if (score1 > score2) team1Stats.totalPoints += 8;
@@ -501,7 +2027,7 @@
                                     }
                                 }
 
-                                // Update per-phase totals
+                                // Mettre à jour les totaux par phase
                                 if (team1Stats && team1Stats.detailsByPhase[phase.id]) {
                                     team1Stats.detailsByPhase[phase.id].diffScore += (score1 - score2);
                                     if (score1 > score2) team1Stats.detailsByPhase[phase.id].points += 8;
@@ -543,1533 +2069,100 @@
         return sortedRankings;
     }
 
-    // --- Fonctions de Gestion des Tournois (Firestore) ---
-
-    /**
-     * Charge tous les tournois créés par l'utilisateur actuel.
-     * Met en place un listener en temps réel.
-     */
-    async function loadAllUserTournaments() {
-        // Vérifie si window.db et window.userId sont bien disponibles (mis à jour par l'initialisation Firebase dans index.html)
-        if (!window.db || !window.userId || !window.appId) {
-            console.warn("Firestore, userId ou appId non disponible pour charger les tournois.");
-            // Si l'utilisateur est déconnecté, s'assurer que les données des tournois sont effacées.
-            allUserTournaments = [];
-            if (window.location.hash === '#tournaments') {
-                renderTournamentDashboard(); // Re-render le tableau de bord des tournois qui sera vide
-            }
-            updateNavLinksVisibility();
-            updateTournamentDisplay();
-            return;
-        }
-
-        if (window.allUserTournamentsUnsubscribe) {
-            window.allUserTournamentsUnsubscribe();
-        }
-
-        const tournamentsRef = window.collection(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`);
-        const q = window.query(tournamentsRef);
-
-        window.allUserTournamentsUnsubscribe = window.onSnapshot(q, (snapshot) => {
-            const fetchedTournaments = [];
-            snapshot.forEach(doc => {
-                fetchedTournaments.push({ id: doc.id, ...doc.data() });
-            });
-            allUserTournaments = fetchedTournaments;
-            console.log("All user tournaments updated:", allUserTournaments);
-            if (window.location.hash === '#tournaments') {
-                renderTournamentDashboard();
-            }
-            updateNavLinksVisibility();
-            updateTournamentDisplay();
-        }, (error) => {
-            console.error("Error fetching user tournaments:", error);
-            showToast("Erreur lors du chargement de vos tournois.", "error");
-        });
-    }
-
-    /**
-     * Sauvegarde toutes les données du tournoi actuellement sélectionné dans Firestore.
-     * Cette fonction est appelée par `saveAllData()` qui gère la logique localStorage/Firestore.
-     * Elle est ici pour la clarté si on voulait l'appeler directement pour Firestore.
-     */
-    // function saveTournamentDataToFirestore() { /* ... */ }
-
-    /**
-     * Met à jour l'affichage du nom du tournoi actif dans la barre de navigation.
-     */
-    function updateTournamentDisplay() {
-        if (currentTournamentNameDisplay) {
-            if (currentTournamentData && currentTournamentData.id !== 'simulation') {
-                currentTournamentNameDisplay.textContent = `Tournoi Actif: ${escapeHtml(currentTournamentData.name)}`;
-                currentTournamentNameDisplay.classList.remove('hidden');
-            } else if (currentTournamentData && currentTournamentData.id === 'simulation') {
-                currentTournamentNameDisplay.textContent = `Mode Simulation (max ${MAX_SIMULATION_TEAMS} équipes)`;
-                currentTournamentNameDisplay.classList.remove('hidden');
-            }
-            else {
-                currentTournamentNameDisplay.textContent = '';
-                currentTournamentNameDisplay.classList.add('hidden');
-            }
-        }
-    }
-
-    /**
-     * Crée un nouveau tournoi Firestore.
-     * @param {string} name Nom du tournoi.
-     * @param {string} date Date du tournoi (formatYYYY-MM-DD).
-     * @param {number} numTeams Nombre d'équipes prévues.
-     */
-    async function createNewTournament(name, date, numTeams) {
-        if (!window.db || !window.userId || !window.appId) {
-            showToast("Veuillez vous connecter pour créer un tournoi.", "error");
-            return;
-        }
-        if (!name.trim() || !date || isNaN(numTeams) || numTeams < 2) {
-            showToast("Veuillez remplir tous les champs (Nom, Date, Nombre d'équipes >= 2).", "error");
-            return;
-        }
-
-        try {
-            const tournamentsCollectionRef = window.collection(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`);
-            const newTournamentData = {
-                name: name.trim(),
-                date: date,
-                numTeamsAllowed: numTeams,
-                ownerId: window.userId,
-                createdAt: window.serverTimestamp ? window.serverTimestamp() : Date.now(),
-                teams: [],
-                brassagePhases: [],
-                eliminationPhases: {},
-                secondaryGroupsPreview: {},
-                eliminatedTeams: [],
-                currentDisplayedPhaseId: null
-            };
-
-            const docRef = await window.addDoc(tournamentsCollectionRef, newTournamentData);
-            currentTournamentId = docRef.id;
-            localStorage.setItem(CURRENT_TOURNAMENT_ID_KEY, currentTournamentId);
-            showToast(`Tournoi "${escapeHtml(name)}" créé et sélectionné !`, "success");
-            // loadAllData sera déclenché par onSnapshot via le selectTournament qui se fera automatiquement
-            // après la création du document.
-        } catch (error) {
-            console.error("Erreur lors de la création du tournoi:", error);
-            showToast("Erreur lors de la création du tournoi: " + error.message, "error");
-        }
-    }
-
-    /**
-     * Sélectionne un tournoi existant et charge ses données.
-     * @param {string} tournamentId L'ID du tournoi à sélectionner.
-     */
-    async function selectTournament(tournamentId) {
-        if (!window.db || !window.userId || !window.appId) {
-            showToast("Veuillez vous connecter pour sélectionner un tournoi.", "error");
-            return;
-        }
-        if (currentTournamentId === tournamentId) {
-            showToast("Ce tournoi est déjà sélectionné.", "info");
-            return;
-        }
-
-        currentTournamentId = tournamentId;
-        localStorage.setItem(CURRENT_TOURNAMENT_ID_KEY, tournamentId);
-        showToast("Chargement du tournoi...", "info");
-        await loadAllData(); // Charger les données du nouveau tournoi
-    }
-
-    /**
-     * Supprime un tournoi.
-     * @param {string} tournamentId L'ID du tournoi à supprimer.
-     */
-    async function deleteTournament(tournamentId) {
-        if (!window.db || !window.userId || !window.appId) {
-            showToast("Veuillez vous connecter pour supprimer un tournoi.", "error");
-            return;
-        }
-
-        const tournamentToDelete = allUserTournaments.find(t => t.id === tournamentId);
-        if (!tournamentToDelete) {
-            showToast("Tournoi non trouvé.", "error");
-            return;
-        }
-        // Vérification de la propriété ownerId pour s'assurer que l'utilisateur est le propriétaire
-        if (tournamentToDelete.ownerId !== window.userId) {
-            showToast("Vous n'êtes pas le propriétaire de ce tournoi et ne pouvez pas le supprimer.", "error");
-            return;
-        }
-
-        const messageContent = document.createElement('p');
-        messageContent.textContent = `Êtes-vous sûr de vouloir supprimer le tournoi "${escapeHtml(tournamentToDelete.name)}" ? Cette action est irréversible.`;
-        messageContent.className = 'text-gray-700';
-
-        showModal('Confirmer la suppression du tournoi', messageContent, async () => {
-            try {
-                const tournamentDocRef = window.doc(window.db, `artifacts/${window.appId}/users/${window.userId}/tournaments`, tournamentId);
-                await window.deleteDoc(tournamentDocRef);
-
-                if (currentTournamentId === tournamentId) {
-                    currentTournamentId = null;
-                    currentTournamentData = null;
-                    localStorage.removeItem(CURRENT_TOURNAMENT_ID_KEY);
-                    if (window.currentTournamentUnsubscribe) {
-                        window.currentTournamentUnsubscribe();
-                        window.currentTournamentUnsubscribe = null;
-                    }
-                }
-                showToast(`Tournoi "${escapeHtml(tournamentToDelete.name)}" supprimé.`, "success");
-                // loadAllUserTournaments sera déclenché par onSnapshot
-                handleLocationHash(); // Rediriger l'utilisateur après la suppression
-            } catch (error) {
-                console.error("Erreur lors de la suppression du tournoi:", error);
-                showToast("Erreur lors de la suppression du tournoi: " + error.message, "error");
-            }
-        }, true);
-    }
-
-
-    // --- Fonctions de Routage (seront définies dans Partie 4 mais dépendent de la visibilité) ---
-    // Déclarées ici pour que les autres fonctions (comme updateNavLinksVisibility) puissent les appeler
-    function renderHomePage() { /* sera défini dans Partie 4 */ }
-    function renderTournamentDashboard() { /* sera défini dans Partie 4 */ }
-    function renderEquipesPage() { /* sera défini dans Partie 4 */ }
-    function renderBrassagesPage() { /* sera défini dans Partie 4 */ }
-    function renderEliminatoiresPage() { /* sera défini dans Partie 4 */ }
-    function renderClassementsPage() { /* sera défini dans Partie 4 */ }
-    function renderAuthPage() { /* sera défini dans Partie 4 */ }
-    function renderEliminationSelectionPage() { /* sera défini dans Partie 4 */ }
-
-
-    const routes = {
-        '#home': renderHomePage,
-        '#tournaments': renderTournamentDashboard,
-        '#equipes': renderEquipesPage,
-        '#brassages': renderBrassagesPage,
-        '#eliminatoires': renderEliminatoiresPage,
-        '#classements': renderClassementsPage,
-        '#auth': renderAuthPage,
-        '#elimination-selection': renderEliminationSelectionPage
-    };
-
-    /**
-     * Gère le changement de route en fonction du hash de l'URL.
-     */
-    function handleLocationHash() {
-        let path = window.location.hash || '#home'; // Par défaut, la page d'accueil
-
-        // Si l'utilisateur n'est pas connecté et qu'il n'est pas sur la page d'authentification,
-        // le rediriger vers la page d'authentification.
-        if (!window.userId && path !== '#auth') {
-            path = '#auth';
-            window.location.hash = '#auth'; // Mettre à jour l'URL pour refléter la redirection
-        } else if (window.userId && path === '#auth') {
-            // Si l'utilisateur est connecté et qu'il est sur la page d'authentification,
-            // le rediriger vers la page des tournois si aucun tournoi n'est sélectionné, sinon l'accueil
-            if (!currentTournamentId) {
-                 path = '#tournaments';
-                 window.location.hash = '#tournaments';
-            } else {
-                 path = '#home';
-                 window.location.hash = '#home';
-            }
-        }
-
-        const renderFunction = routes[path];
-        if (renderFunction) {
-            renderFunction();
-        } else {
-            console.warn(`Route inconnue: ${path}. Redirection vers l'accueil.`);
-            window.location.hash = '#home';
-        }
-        updateNavLinksVisibility(); // Mettre à jour la visibilité et les classes des liens de nav
-    }
-
-    /**
-     * Met à jour la visibilité et la classe 'active' des liens de navigation.
-     */
-    function updateNavLinksVisibility() {
-        const currentPath = window.location.hash;
-        // Mettre à jour la classe "active" de la navigation sur les liens <a>
-        document.querySelectorAll('#main-nav-links .nav-link').forEach(link => {
-            if (link && link.getAttribute('href') === currentPath) {
-                link.classList.add('bg-blue-700'); // Classe pour l'état actif
-            } else if (link) {
-                link.classList.remove('bg-blue-700');
-            }
-        });
-        // Gérer spécifiquement le lien 'Accueil' qui est directement sous 'nav' (pas dans #main-nav-links)
-        const homeNavLink = document.getElementById('nav-home');
-        if (homeNavLink) {
-            if (homeNavLink.getAttribute('href') === currentPath) {
-                homeNavLink.classList.add('bg-blue-700');
-            } else {
-                homeNavLink.classList.remove('bg-blue-700');
-            }
-        }
-
-
-        // Gérer la visibilité des blocs d'informations et des liens de navigation
-        const isLoggedIn = !!window.userId;
-        const tournamentSelected = !!currentTournamentId; // True si un tournoi Firestore est sélectionné
-
-        if (authInfoDiv) {
-            authInfoDiv.classList.toggle('hidden', !isLoggedIn);
-        }
-        if (userEmailSpan && window.auth && window.auth.currentUser) {
-            userEmailSpan.textContent = window.auth.currentUser.email || "Anonyme";
-        } else if (userEmailSpan) {
-            userEmailSpan.textContent = "Déconnecté";
-        }
-
-        if (logoutBtn) {
-            logoutBtn.classList.toggle('hidden', !isLoggedIn);
-        }
-        if (selectTournamentBtn) {
-            selectTournamentBtn.classList.toggle('hidden', !isLoggedIn); // Toujours visible si connecté
-        }
-        if (currentTournamentNameDisplay) {
-            // Toujours afficher le nom du tournoi si un tournoi est "actif" (même en simulation)
-            currentTournamentNameDisplay.classList.toggle('hidden', !currentTournamentData);
-        }
-
-        // Afficher/masquer les éléments <li> des liens de navigation principaux
-        // navLinks.home est maintenant le <li> du lien Accueil
-        // Le lien "Tournois" est toujours visible si connecté
-        if (navLinks.home) navLinks.home.classList.toggle('hidden', !isLoggedIn && currentPath !== '#auth');
-        if (navLinks.tournaments) navLinks.tournaments.classList.toggle('hidden', !isLoggedIn);
-        // Les autres liens ne sont visibles que si un tournoi est sélectionné (Firestore ou simulation)
-        if (navLinks.equipes) navLinks.equipes.classList.toggle('hidden', !currentTournamentData);
-        if (navLinks.brassages) navLinks.brassages.classList.toggle('hidden', !currentTournamentData);
-        if (navLinks.eliminatoires) navLinks.eliminatoires.classList.toggle('hidden', !currentTournamentData);
-        if (navLinks.classements) navLinks.classements.classList.toggle('hidden', !currentTournamentData);
-    }
-
-
-    // --- Initialisation de l'Application ---
-    // Tout le code qui interagit avec le DOM doit être à l'intérieur de DOMContentLoaded.
-    // Les fonctions globales sont définies dans le IIFE pour être accessibles via `window.`.
-    // Les écouteurs d'événements pour les boutons de la modale globale sont attachés ici.
-    // La logique d'initialisation de Firebase est dans index.html.
-    // `window.onFirebaseReady` est le callback qui est appelé une fois Firebase initialisé et l'état d'auth connu.
-    document.addEventListener('DOMContentLoaded', () => {
-        // 1. Initialisation des variables DOM ici, après que le document soit prêt
-        modal = document.getElementById('actionModal');
-        modalTitle = document.getElementById('modalTitle');
-        modalBody = document.getElementById('modalBody');
-        modalConfirmBtn = document.getElementById('modalConfirmBtn');
-        modalCancelBtn = document.getElementById('modalCancelBtn');
-        toastContainer = document.getElementById('toast-container');
-
-        authInfoDiv = document.getElementById('auth-info');
-        userEmailSpan = document.getElementById('user-email');
-        logoutBtn = document.getElementById('logout-btn');
-        selectTournamentBtn = document.getElementById('select-tournament-btn');
-        currentTournamentNameDisplay = document.getElementById('current-tournament-name');
-
-        // navLinks maintenant cible les LI (pour les cacher/afficher)
-        navLinks = {
-            home: document.getElementById('nav-home-li'),
-            tournaments: document.getElementById('nav-tournaments'),
-            equipes: document.getElementById('nav-equipes'),
-            brassages: document.getElementById('nav-brassages'),
-            eliminatoires: document.getElementById('nav-eliminatoires'),
-            classements: document.getElementById('nav-classements'),
-        };
-
-        // 2. Attacher les gestionnaires d'événements pour les boutons de la modale globale
-        if (modalCancelBtn) {
-            modalCancelBtn.addEventListener('click', hideModal);
-        } else {
-            console.error("modalCancelBtn non trouvé après DOMContentLoaded. Vérifiez l'HTML.");
-        }
-
-        // 3. Firebase est initialisé dans le script inline de index.html.
-        // On attend que window.onFirebaseReady soit appelé par ce script.
-        window.onFirebaseReady = async (user) => {
-            console.log("Firebase est prêt. Gestion du routage et chargement initial des données.");
-            // Si l'utilisateur est connecté, tenter de charger les tournois et les données du tournoi.
-            if (user) {
-                await loadAllUserTournaments(); // Charger la liste des tournois de l'utilisateur
-                await loadAllData(); // Charger les données du tournoi sélectionné (ou rediriger)
-            } else {
-                // Si déconnecté, s'assurer que l'état de l'application est propre
-                currentTournamentId = null;
-                currentTournamentData = null; // Important: reset currentTournamentData
-                allTeams = [];
-                allBrassagePhases = [];
-                eliminationPhases = {};
-                currentSecondaryGroupsPreview = {};
-                eliminatedTeams = new Set();
-                currentDisplayedPhaseId = null;
-                allUserTournaments = []; // Vider la liste des tournois
-                loadAllData(); // Recharger les données en mode simulation
-            }
-            handleLocationHash(); // Gère la route initiale et la visibilité des liens
-        };
-
-        // 4. Écouter les changements de hash dans l'URL pour le routage
-        window.addEventListener('hashchange', handleLocationHash);
-
-        // 5. Gestionnaire pour le bouton de déconnexion
-        if (logoutBtn) {
-            logoutBtn.addEventListener('click', async () => {
-                try {
-                    if (window.auth) {
-                        await window.signOut(window.auth);
-                        showToast("Déconnexion réussie !", "info");
-                        // onAuthStateChanged gérera le nettoyage et la redirection
-                    } else {
-                        showToast("Auth non initialisée.", "error");
-                    }
-                } catch (error) {
-                    console.error("Erreur de déconnexion:", error);
-                    showToast("Erreur lors de la déconnexion.", "error");
-                }
-            });
-        }
-
-        // 6. Gestionnaire pour le bouton "Changer de tournoi"
-        if (selectTournamentBtn) {
-            selectTournamentBtn.addEventListener('click', () => {
-                window.location.hash = '#tournaments';
-            });
-        }
-    });
-
-    // Rendre les fonctions globales nécessaires pour être appelées depuis d'autres parties du code
-    // ou directement par le HTML (via les gestionnaires d'événements JavaScript générés).
-    window.showToast = showToast;
-    window.showModal = showModal;
-    window.hideModal = hideModal;
-
-    // Exposer les variables d'état (lecture seule pour les autres modules)
-    Object.defineProperty(window, 'allTeams', { get: () => allTeams });
-    Object.defineProperty(window, 'allBrassagePhases', { get: () => allBrassagePhases });
-    Object.defineProperty(window, 'eliminationPhases', { get: () => eliminationPhases });
-    Object.defineProperty(window, 'currentSecondaryGroupsPreview', { get: () => currentSecondaryGroupsPreview });
-    Object.defineProperty(window, 'eliminatedTeams', { get: () => eliminatedTeams });
-    Object.defineProperty(window, 'currentDisplayedPhaseId', { get: () => currentDisplayedPhaseId });
-    Object.defineProperty(window, 'currentTournamentId', { get: () => currentTournamentId });
-    Object.defineProperty(window, 'currentTournamentData', { get: () => currentTournamentData });
-    Object.defineProperty(window, 'allUserTournaments', { get: () => allUserTournaments });
-    Object.defineProperty(window, 'MAX_SIMULATION_TEAMS', { get: () => MAX_SIMULATION_TEAMS });
-
-
-    window.saveAllData = saveAllData;
-    window.loadAllData = loadAllData;
-    window.createNewTournament = createNewTournament;
-    window.selectTournament = selectTournament;
-    window.deleteTournament = deleteTournament;
-    window.teamExists = teamExists;
-    window.isMatchRepeated = isMatchRepeated;
-    window.updateRepeatedMatchesCountDisplay = updateRepeatedMatchesCountDisplay;
-    window.showRepeatedMatchDetailsModal = showRepeatedMatchDetailsModal;
-    window.updateNavLinksVisibility = updateNavLinksVisibility;
-    window.updateTournamentDisplay = updateTournamentDisplay;
-    window.handleLocationHash = handleLocationHash;
-    window.getGlobalRankings = getGlobalRankings; // Exposer pour les classements
-
-    // Exposer les fonctions de rendu et de logique des pages (Partie 4 et 5)
-    window.renderHomePage = renderHomePage;
-    window.setupAuthPageLogic = setupAuthPageLogic; // Sera définie plus tard
-    window.renderEquipesPage = renderEquipesPage;
-    window.setupEquipesPageLogic = setupEquipesPageLogic;
-    window.renderBrassagesPage = renderBrassagesPage;
-    window.setupBrassagesPageLogic = setupBrassagesPageLogic;
-    window.renderSecondaryGroupsPreview = renderSecondaryGroupsPreview;
-    window.renderEliminationSelectionPage = renderEliminationSelectionPage;
-    window.setupEliminationSelectionPageLogic = setupEliminationSelectionPageLogic;
-    window.renderEliminatoiresPage = renderEliminatoiresPage;
-    window.setupEliminatoiresPageLogic = setupEliminatoiresPageLogic;
-    window.renderClassementsPage = renderClassementsPage;
-    window.setupClassementsPageLogic = setupClassementsPageLogic;
-    window.renderTournamentDashboard = renderTournamentDashboard;
-    window.setupTournamentDashboardLogic = setupTournamentDashboardLogic; // Sera définie plus tard
-
-    // Exposer les fonctions de gestion des équipes et phases de brassage
-    window.addTeam = addTeam; // Sera définie plus tard
-    window.updateTeam = updateTeam; // Sera définie plus tard
-    window.deleteTeam = deleteTeam; // Sera définie plus tard
-    window.isBrassagePhaseComplete = isBrassagePhaseComplete; // Sera définie plus tard
-    window.generateAndEvaluatePools = generateAndEvaluatePools; // Sera définie plus tard
-    window.generatePoolsForPhase = generatePoolsForPhase; // Sera définie plus tard
-    window._generatePoolsLogicInitialLevels = _generatePoolsLogicInitialLevels; // Sera définie plus tard
-    window._generatePoolsLogicRankingBased = _generatePoolsLogicRankingBased; // Sera définie plus tard
-    window._performSecondaryGroupsPreview = _performSecondaryGroupsPreview; // Sera définie plus tard
-    window.showTeamOptionsModal = showTeamOptionsModal; // Sera définie plus tard
-    window.showMoveTeamModal = showMoveTeamModal; // Sera définie plus tard
-    window.moveTeamBetweenSecondaryGroups = moveTeamBetweenSecondaryGroups; // Sera définie plus tard
-    window.validateSecondaryGroupsForElimination = validateSecondaryGroupsForElimination; // Sera définie plus tard
-    window.validateForDirectElimination = validateForDirectElimination; // Sera définie plus tard
-    window.generateSecondaryBrassagePhases = generateSecondaryBrassagePhases; // Sera définie plus tard
-    window.clearAllPhases = clearAllPhases; // Sera définie plus tard
-    window.renderCurrentBrassagePhaseDetails = renderCurrentBrassagePhaseDetails; // Sera définie plus tard
-
-    // Exposer les constantes de type de phase
-    window.PHASE_TYPE_INITIAL = PHASE_TYPE_INITIAL;
-    window.PHASE_TYPE_SECONDARY_BRASSAGE = PHASE_TYPE_SECONDARY_BRASSAGE;
-    window.PHASE_TYPE_ELIMINATION_SEEDING = PHASE_TYPE_ELIMINATION_SEEDING;
-
-    // Fonctions d'import/export Excel (à définir ou à laisser si déjà existantes)
-    window.importScoresFromExcel = importScoresFromExcel; // Sera définie plus tard
-    window.exportScoresToExcel = exportScoresToExcel; // Sera définie plus tard
-
-
-    // --- Fonctions de Gestion des Équipes ---
-
-    /**
-     * Ajoute une nouvelle équipe à la liste.
-     * @param {string} name Le nom de l'équipe.
-     * @param {number} level Le niveau de l'équipe (1-10).
-     */
-    async function addTeam(name, level) {
-        if (!currentTournamentData) {
-            showToast("Aucun tournoi n'est sélectionné ou les données ne sont pas chargées.", "error");
-            return;
-        }
-
-        if (currentTournamentData.id === 'simulation' && allTeams.length >= MAX_SIMULATION_TEAMS) {
-            showToast(`En mode simulation, vous ne pouvez pas ajouter plus de ${MAX_SIMULATION_TEAMS} équipes. Créez un compte pour des tournois plus grands.`, "error");
-            return;
-        }
-
-        if (teamExists(name)) {
-            showToast(`L'équipe "${escapeHtml(name)}" existe déjà. Veuillez choisir un nom différent.`, "error");
-            return;
-        }
-
-        const newTeam = {
-            id: 'team_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
-            name: name,
-            level: level
-        };
-        allTeams.push(newTeam);
-        await saveAllData(); // Sauvegarde les données après l'ajout
-        showToast(`Équipe "${escapeHtml(name)}" ajoutée avec succès !`, "success");
-        renderEquipesPage(); // Re-render la page pour mettre à jour la liste
-    }
-
-    /**
-     * Met à jour une équipe existante.
-     * @param {string} teamId L'ID de l'équipe à modifier.
-     * @param {string} newName Le nouveau nom de l'équipe.
-     * @param {number} newLevel Le nouveau niveau de l'équipe.
-     */
-    async function updateTeam(teamId, newName, newLevel) {
-        if (!currentTournamentData) {
-            showToast("Aucun tournoi n'est sélectionné ou les données ne sont pas chargées.", "error");
-            return;
-        }
-
-        const teamToUpdate = allTeams.find(t => t.id === teamId);
-        if (!teamToUpdate) {
-            showToast("Équipe non trouvée.", "error");
-            return;
-        }
-
-        if (teamExists(newName) && newName.toLowerCase() !== teamToUpdate.name.toLowerCase()) {
-            showToast(`Une équipe nommée "${escapeHtml(newName)}" existe déjà.`, "error");
-            return;
-        }
-
-        teamToUpdate.name = newName;
-        teamToUpdate.level = newLevel;
-        await saveAllData(); // Sauvegarde les données après la modification
-        showToast(`Équipe "${escapeHtml(newName)}" mise à jour.`, "success");
-        renderEquipesPage(); // Re-render la page pour mettre à jour la liste
-    }
-
-    /**
-     * Supprime une équipe.
-     * @param {string} teamId L'ID de l'équipe à supprimer.
-     */
-    async function deleteTeam(teamId) {
-        if (!currentTournamentData) {
-            showToast("Aucun tournoi n'est sélectionné ou les données ne sont pas chargées.", "error");
-            return;
-        }
-
-        const teamToDelete = allTeams.find(t => t.id === teamId);
-        if (!teamToDelete) {
-            showToast("Équipe non trouvée.", "error");
-            return;
-        }
-
-        const messageContent = document.createElement('p');
-        messageContent.textContent = `Êtes-vous sûr de vouloir supprimer l'équipe "${escapeHtml(teamToDelete.name)}" ? Cette action est irréversible.`;
-        messageContent.className = 'text-gray-700';
-
-        showModal('Confirmer la suppression', messageContent, async () => {
-            allTeams = allTeams.filter(team => team.id !== teamId);
-            eliminatedTeams.delete(teamId); // Supprimer l'équipe des éliminées si elle y était
-            await saveAllData(); // Sauvegarde les données après la suppression
-            showToast(`Équipe "${escapeHtml(teamToDelete.name)}" supprimée.`, "success");
-            renderEquipesPage(); // Re-render la page pour mettre à jour la liste
-        }, true);
-    }
-    // --- Fonctions de Gestion des Phases de Brassage et Élimination ---
-
-    /**
-     * Vérifie si tous les matchs d'une phase de brassage donnée ont des scores.
-     * @param {string} phaseId L'ID de la phase à vérifier.
-     * @returns {boolean} True si tous les matchs ont des scores, false sinon.
-     */
-    function isBrassagePhaseComplete(phaseId) {
-        const phase = allBrassagePhases.find(p => p.id === phaseId);
-        if (!phase || !phase.pools) return false;
-
-        for (const pool of phase.pools) {
-            if (pool.matches) {
-                for (const match of pool.matches) {
-                    if (match.score1 === undefined || match.score2 === undefined || match.score1 < 0 || match.score2 < 0) {
-                        return false; // Au moins un score est manquant ou invalide
-                    }
-                }
-            }
-        }
-        return true;
-    }
-
-    /**
-     * Génère et évalue les poules pour une nouvelle phase de brassage ou de seeding.
-     * @param {string} phaseType Le type de phase à générer (PHASE_TYPE_INITIAL, PHASE_TYPE_SECONDARY_BRASSAGE, PHASE_TYPE_ELIMINATION_SEEDING).
-     */
-    async function generateAndEvaluatePools(phaseType) {
-        if (!currentTournamentData) {
-            showToast("Aucun tournoi n'est sélectionné ou les données ne sont pas chargées.", "error");
-            return;
-        }
-
-        if (allTeams.length < 4) {
-            showToast("Un minimum de 4 équipes est requis pour générer des brassages.", "error");
-            return;
-        }
-
-        let teamsToUse = [...allTeams]; // Copie des équipes
-        let phaseName = '';
-        let basis = ''; // Critère de génération (levels ou ranking)
-
-        if (phaseType === PHASE_TYPE_INITIAL) {
-            phaseName = `Brassage Initial - ${allBrassagePhases.length + 1}`;
-            basis = 'levels'; // Basé sur les niveaux initiaux
-        } else if (phaseType === PHASE_TYPE_SECONDARY_BRASSAGE) {
-            const lastPhase = allBrassagePhases[allBrassagePhases.length - 1];
-            if (!lastPhase || !lastPhase.generated || !lastPhase.rankings) {
-                showToast("Veuillez d'abord compléter la phase précédente pour générer un brassage secondaire.", "error");
-                return;
-            }
-            phaseName = `Brassage Secondaire - ${allBrassagePhases.length + 1}`;
-            basis = 'ranking'; // Basé sur le classement de la phase précédente
-            teamsToUse = lastPhase.rankings.map(r => allTeams.find(t => t.id === r.teamId)).filter(Boolean); // Utiliser les équipes classées
-        } else if (phaseType === PHASE_TYPE_ELIMINATION_SEEDING) {
-            // La logique de génération pour l'élimination_seeding est différente et est gérée par _performSecondaryGroupsPreview
-            // Cette fonction ne devrait pas être appelée directement avec PHASE_TYPE_ELIMINATION_SEEDING.
-            showToast("Veuillez utiliser le bouton 'Générer Groupes Éliminatoires' pour cette phase.", "error");
-            return;
-        }
-
-        // Déterminer le nombre de poules et d'équipes par poule
-        // Pour simplifier, nous allons viser des poules de 3 ou 4 équipes.
-        let numPools = Math.floor(teamsToUse.length / 4);
-        let teamsPerPool = 4;
-
-        if (numPools === 0) { // Si moins de 4 équipes, on ne peut pas faire de poules de 4
-            numPools = 1;
-            teamsPerPool = teamsToUse.length;
-            if (teamsPerPool < 2) {
-                showToast("Pas assez d'équipes pour former des poules.", "error");
-                return;
-            }
-        } else if (teamsToUse.length % 4 !== 0 && teamsToUse.length % 3 === 0) {
-            teamsPerPool = 3;
-            numPools = teamsToUse.length / 3;
-        } else if (teamsToUse.length % 4 !== 0 && teamsToUse.length % 3 !== 0) {
-            // Cas où la division n'est pas parfaite, essayer de répartir au mieux
-            // Prioriser des poules de 4, puis de 3.
-            // Exemple: 10 équipes -> 2 poules de 4, 1 poule de 2 (pas idéal)
-            // Ou 10 équipes -> 3 poules (2 de 3, 1 de 4)
-            // Pour l'instant, on reste simple, mais c'est ici qu'une logique plus complexe serait nécessaire.
-            // Pour l'exemple, on va juste s'assurer que teamsPerPool est au moins 2.
-            if (teamsToUse.length < 6) { // Moins de 6 équipes, faire une seule poule
-                numPools = 1;
-                teamsPerPool = teamsToUse.length;
-            } else { // Plus de 6 équipes, tenter de faire des poules de 3 ou 4
-                numPools = Math.max(1, Math.floor(teamsToUse.length / 4));
-                teamsPerPool = Math.floor(teamsToUse.length / numPools);
-                // Ajustement pour éviter des poules trop petites ou trop grandes
-                while (teamsPerPool < 3 && numPools > 1) {
-                    numPools--;
-                    teamsPerPool = Math.floor(teamsToUse.length / numPools);
-                }
-                while (teamsPerPool > 4 && numPools < teamsToUse.length / 2) { // Éviter des poules trop grandes
-                    numPools++;
-                    teamsPerPool = Math.floor(teamsToUse.length / numPools);
-                }
-                if (teamsPerPool < 2) teamsPerPool = 2; // Minimum 2 équipes par poule
-            }
-        }
-
-        const newPhase = await generatePoolsForPhase(phaseName, phaseType, teamsToUse, basis, numPools, teamsPerPool);
-        if (newPhase) {
-            allBrassagePhases.push(newPhase);
-            currentDisplayedPhaseId = newPhase.id; // Afficher la nouvelle phase
-            await saveAllData();
-            showToast(`Phase "${escapeHtml(newPhase.name)}" générée avec succès !`, "success");
-            renderBrassagesPage(); // Re-render pour afficher la nouvelle phase
-        }
-    }
-
-    /**
-     * Génère les poules pour une phase de brassage donnée.
-     * @param {string} phaseName Le nom de la phase.
-     * @param {string} phaseType Le type de phase (initial, secondaire).
-     * @param {Array<Object>} teams Les équipes à répartir.
-     * @param {string} basis Le critère de génération ('levels' ou 'ranking').
-     * @param {number} numPools Le nombre de poules à créer.
-     * @param {number} teamsPerPool Le nombre d'équipes par poule.
-     * @returns {Object|null} La nouvelle phase générée ou null en cas d'échec.
-     */
-    async function generatePoolsForPhase(phaseName, phaseType, teams, basis, numPools, teamsPerPool) {
-        const newPhase = {
-            id: 'phase_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
-            name: phaseName,
-            type: phaseType,
-            generated: false, // Sera true après la sauvegarde des scores
-            pools: [],
-            rankings: [], // Le classement de cette phase sera stocké ici
-            createdAt: new Date().toISOString()
-        };
-
-        let pools = [];
-        if (basis === 'levels') {
-            pools = _generatePoolsLogicInitialLevels(teams, numPools, teamsPerPool);
-        } else if (basis === 'ranking') {
-            pools = _generatePoolsLogicRankingBased(teams, numPools, teamsPerPool);
-        } else {
-            showToast("Critère de génération de poules inconnu.", "error");
-            return null;
-        }
-
-        // Générer les matchs pour chaque poule
-        pools.forEach(pool => {
-            pool.matches = [];
-            for (let i = 0; i < pool.teams.length; i++) {
-                for (let j = i + 1; j < pool.teams.length; j++) {
-                    const team1Id = pool.teams[i];
-                    const team2Id = pool.teams[j];
-                    pool.matches.push({
-                        id: `match_${newPhase.id}_${team1Id}_${team2Id}_${Math.random().toString(36).substring(2, 5)}`,
-                        team1Id: team1Id,
-                        team2Id: team2Id,
-                        score1: undefined, // Score initialement non défini
-                        score2: undefined,
-                        winnerId: null,
-                        loserId: null
-                    });
-                }
-            }
-        });
-
-        newPhase.pools = pools;
-        return newPhase;
-    }
-
-    /**
-     * Logique de génération des poules basée sur les niveaux initiaux des équipes.
-     * Tente d'équilibrer les niveaux entre les poules.
-     * @param {Array<Object>} teams Les équipes avec leurs IDs et niveaux.
-     * @param {number} numPools Le nombre de poules à créer.
-     * @param {number} teamsPerPool Le nombre d'équipes par poule.
-     * @returns {Array<Object>} Un tableau d'objets poule, chacun avec un tableau d'IDs d'équipes.
-     */
-    function _generatePoolsLogicInitialLevels(teams, numPools, teamsPerPool) {
-        // Trier les équipes par niveau (les plus faibles en premier)
-        const sortedTeams = [...teams].sort((a, b) => a.level - b.level);
-        const pools = Array.from({ length: numPools }, (_, i) => ({
-            id: `pool_${Date.now()}_${i}`,
-            name: `Poule ${String.fromCharCode(65 + i)}`,
-            teams: []
-        }));
-
-        let currentPoolIndex = 0;
-        let direction = 1; // 1 pour aller de l'avant, -1 pour aller en arrière (méthode du serpentin)
-
-        sortedTeams.forEach(team => {
-            if (pools[currentPoolIndex].teams.length < teamsPerPool) {
-                pools[currentPoolIndex].teams.push(team.id);
-            } else {
-                // Si la poule est pleine, trouver la prochaine poule non pleine
-                let nextPoolFound = false;
-                for (let i = 0; i < numPools; i++) {
-                    const nextIndex = (currentPoolIndex + direction * (i + 1) + numPools) % numPools;
-                    if (pools[nextIndex].teams.length < teamsPerPool) {
-                        currentPoolIndex = nextIndex;
-                        pools[currentPoolIndex].teams.push(team.id);
-                        nextPoolFound = true;
-                        break;
-                    }
-                }
-                if (!nextPoolFound) {
-                    // Fallback: si toutes les poules sont "pleines" selon teamsPerPool, mais il reste des équipes
-                    // Cela peut arriver si teams.length n'est pas un multiple parfait de teamsPerPool
-                    // On ajoute l'équipe à la poule actuelle (qui dépassera teamsPerPool)
-                    pools[currentPoolIndex].teams.push(team.id);
-                }
-            }
-
-            // Mettre à jour l'index de la poule pour la prochaine équipe
-            currentPoolIndex += direction;
-            if (currentPoolIndex >= numPools || currentPoolIndex < 0) {
-                direction *= -1; // Changer de direction
-                currentPoolIndex += direction; // Ajuster l'index pour rester dans les limites
-            }
-        });
-
-        // Distribuer les équipes restantes si teams.length n'est pas un multiple parfait
-        let remainingTeams = sortedTeams.filter(team => !pools.some(pool => pool.teams.includes(team.id)));
-        let poolCounter = 0;
-        while (remainingTeams.length > 0) {
-            pools[poolCounter % numPools].teams.push(remainingTeams.shift().id);
-            poolCounter++;
-        }
-
-        // S'assurer que toutes les équipes sont dans une poule
-        const allTeamIdsInPools = new Set();
-        pools.forEach(pool => pool.teams.forEach(teamId => allTeamIdsInPools.add(teamId)));
-        if (allTeamIdsInPools.size !== teams.length) {
-            console.warn("Certaines équipes n'ont pas été réparties dans les poules.");
-            // Logique de récupération ou d'erreur ici
-        }
-
-        console.log("DEBUG: Poules générées par niveaux:", pools);
-        return pools;
-    }
-
-    /**
-     * Logique de génération des poules basée sur le classement des phases précédentes.
-     * Tente de répartir les équipes classées de manière équitable.
-     * @param {Array<Object>} teams Les équipes triées par classement (meilleures en premier).
-     * @param {number} numPools Le nombre de poules à créer.
-     * @param {number} teamsPerPool Le nombre d'équipes par poule.
-     * @returns {Array<Object>} Un tableau d'objets poule, chacun avec un tableau d'IDs d'équipes.
-     */
-    function _generatePoolsLogicRankingBased(teams, numPools, teamsPerPool) {
-        // Les équipes sont déjà censées être triées par classement (meilleures en premier)
-        const sortedTeams = [...teams];
-        const pools = Array.from({ length: numPools }, (_, i) => ({
-            id: `pool_${Date.now()}_${i}`,
-            name: `Poule ${String.fromCharCode(65 + i)}`,
-            teams: []
-        }));
-
-        let currentPoolIndex = 0;
-        let direction = 1; // 1 pour aller de l'avant, -1 pour aller en arrière (méthode du serpentin)
-
-        sortedTeams.forEach(team => {
-            if (pools[currentPoolIndex].teams.length < teamsPerPool) {
-                pools[currentPoolIndex].teams.push(team.id);
-            } else {
-                // Si la poule est pleine, trouver la prochaine poule non pleine
-                let nextPoolFound = false;
-                for (let i = 0; i < numPools; i++) {
-                    const nextIndex = (currentPoolIndex + direction * (i + 1) + numPools) % numPools;
-                    if (pools[nextIndex].teams.length < teamsPerPool) {
-                        currentPoolIndex = nextIndex;
-                        pools[currentPoolIndex].teams.push(team.id);
-                        nextPoolFound = true;
-                        break;
-                    }
-                }
-                if (!nextPoolFound) {
-                    pools[currentPoolIndex].teams.push(team.id);
-                }
-            }
-
-            currentPoolIndex += direction;
-            if (currentPoolIndex >= numPools || currentPoolIndex < 0) {
-                direction *= -1;
-                currentPoolIndex += direction;
-            }
-        });
-
-        // Distribuer les équipes restantes si teams.length n'est pas un multiple parfait
-        let remainingTeams = sortedTeams.filter(team => !pools.some(pool => pool.teams.includes(team.id)));
-        let poolCounter = 0;
-        while (remainingTeams.length > 0) {
-            pools[poolCounter % numPools].teams.push(remainingTeams.shift().id);
-            poolCounter++;
-        }
-
-        console.log("DEBUG: Poules générées par classement:", pools);
-        return pools;
-    }
-
-    /**
-     * Génère une nouvelle phase de brassage secondaire basée sur le classement global actuel.
-     */
-    async function generateSecondaryBrassagePhases() {
-        if (!currentTournamentData) {
-            showToast("Aucun tournoi n'est sélectionné ou les données ne sont pas chargées.", "error");
-            return;
-        }
-
-        const lastCompletedBrassagePhase = allBrassagePhases.filter(p => p.generated && (p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE)).pop();
-
-        if (!lastCompletedBrassagePhase) {
-            showToast("Aucune phase de brassage précédente n'est complétée pour générer un brassage secondaire.", "error");
-            return;
-        }
-
-        // Calculer le classement global basé sur toutes les phases de brassage complétées
-        const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
-
-        if (globalRankings.length < 4) {
-            showToast("Pas assez d'équipes classées pour générer un brassage secondaire.", "error");
-            return;
-        }
-
-        // Utiliser les équipes du classement global pour la nouvelle phase
-        const teamsToUse = globalRankings.map(r => r.teamObject);
-
-        // Déterminer le nombre de poules et d'équipes par poule
-        let numPools = Math.floor(teamsToUse.length / 4);
-        let teamsPerPool = 4;
-
-        if (numPools === 0) {
-            numPools = 1;
-            teamsPerPool = teamsToUse.length;
-            if (teamsPerPool < 2) {
-                showToast("Pas assez d'équipes pour former des poules de brassage secondaire.", "error");
-                return;
-            }
-        } else if (teamsToUse.length % 4 !== 0 && teamsToUse.length % 3 === 0) {
-            teamsPerPool = 3;
-            numPools = teamsToUse.length / 3;
-        } else if (teamsToUse.length % 4 !== 0 && teamsToUse.length % 3 !== 0) {
-            if (teamsToUse.length < 6) {
-                numPools = 1;
-                teamsPerPool = teamsToUse.length;
-            } else {
-                numPools = Math.max(1, Math.floor(teamsToUse.length / 4));
-                teamsPerPool = Math.floor(teamsToUse.length / numPools);
-                while (teamsPerPool < 3 && numPools > 1) {
-                    numPools--;
-                    teamsPerPool = Math.floor(teamsToUse.length / numPools);
-                }
-                while (teamsPerPool > 4 && numPools < teamsToUse.length / 2) {
-                    numPools++;
-                    teamsPerPool = Math.floor(teamsToUse.length / numPools);
-                }
-                if (teamsPerPool < 2) teamsPerPool = 2;
-            }
-        }
-
-        const newPhaseName = `Brassage Secondaire - ${allBrassagePhases.length + 1}`;
-        const newPhase = await generatePoolsForPhase(newPhaseName, PHASE_TYPE_SECONDARY_BRASSAGE, teamsToUse, 'ranking', numPools, teamsPerPool);
-
-        if (newPhase) {
-            allBrassagePhases.push(newPhase);
-            currentDisplayedPhaseId = newPhase.id;
-            await saveAllData();
-            showToast(`Phase "${escapeHtml(newPhase.name)}" générée avec succès !`, "success");
-            renderBrassagesPage();
-        }
-    }
-
-    /**
-     * Efface toutes les phases de brassage et d'élimination.
-     */
-    async function clearAllPhases() {
-        if (!currentTournamentData) {
-            showToast("Aucun tournoi n'est sélectionné ou les données ne sont pas chargées.", "error");
-            return;
-        }
-
-        allBrassagePhases = [];
-        eliminationPhases = {};
-        currentSecondaryGroupsPreview = {};
-        eliminatedTeams.clear(); // Vider le Set des équipes éliminées
-        currentDisplayedPhaseId = null;
-        await saveAllData();
-        showToast("Toutes les phases de brassage et d'élimination ont été effacées.", "info");
-        renderBrassagesPage(); // Re-render la page des brassages
-    }
-
-    /**
-     * Effectue la prévisualisation des groupes secondaires pour la phase d'élimination.
-     * Les équipes sont distribuées en "serpentin" (snaking) pour équilibrer les forces.
-     * @param {Array<Object>} teamsRanked Les équipes triées par classement.
-     * @param {number} numGroups Le nombre de groupes à créer.
-     * @param {number} teamsPerGroup Le nombre d'équipes par groupe.
-     */
-    function _performSecondaryGroupsPreview(teamsRanked, numGroups, teamsPerGroup) {
-        currentSecondaryGroupsPreview = {
-            id: `elim_seeding_${Date.now()}`,
-            groups: {},
-            generatedAt: new Date().toISOString()
-        };
-
-        // Créer les groupes vides
-        for (let i = 0; i < numGroups; i++) {
-            const groupId = `group_${currentSecondaryGroupsPreview.id}_${i}`;
-            currentSecondaryGroupsPreview.groups[groupId] = {
-                id: groupId,
-                name: String.fromCharCode(65 + i), // A, B, C...
-                teams: [],
-                seeding: 'manual'
-            };
-        }
-
-        // Distribuer les équipes en "serpentin"
-        let groupIndex = 0;
-        let direction = 1; // 1 for forward, -1 for backward
-
-        teamsRanked.forEach((team) => {
-            const groupIds = Object.keys(currentSecondaryGroupsPreview.groups);
-            const currentGroupId = groupIds[groupIndex];
-
-            if (currentSecondaryGroupsPreview.groups[currentGroupId].teams.length < teamsPerGroup) {
-                currentSecondaryGroupsPreview.groups[currentGroupId].teams.push(team);
-            } else {
-                // This scenario should ideally not happen if teamsPerGroup and numGroups are correctly calculated.
-                // If it does, it means more teams are being added than the group capacity.
-                // For now, let's just log a warning.
-                console.warn(`Groupe ${currentGroupId} est plein, mais il reste des équipes à distribuer.`);
-            }
-
-            groupIndex += direction;
-
-            if (groupIndex >= numGroups || groupIndex < 0) {
-                direction *= -1; // Reverse direction
-                groupIndex += direction; // Adjust index back within bounds
-            }
-        });
-
-        saveAllData(); // Sauvegarder la prévisualisation
-    }
-
-    /**
-     * Affiche une modale avec les options pour une équipe (déplacer, etc.).
-     * @param {string} teamId L'ID de l'équipe.
-     * @param {string} currentGroupId L'ID du groupe actuel de l'équipe.
-     */
-    function showTeamOptionsModal(teamId, currentGroupId) {
-        const team = allTeams.find(t => t.id === teamId);
-        if (!team) return;
-
-        const content = document.createElement('div');
-        content.innerHTML = `
-            <p class="mb-4">Options pour l'équipe <span class="font-bold">${escapeHtml(team.name)}</span> :</p>
-            <button id="move-team-option-btn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded transition duration-150 w-full mb-2">
-                Déplacer l'équipe
-            </button>
-            <!-- Autres options si nécessaire -->
-        `;
-        showModal(`Options de l'équipe ${escapeHtml(team.name)}`, content, () => { /* No direct confirm action here */ });
-
-        document.getElementById('move-team-option-btn')?.addEventListener('click', () => {
-            hideModal(); // Cacher la modale d'options
-            showMoveTeamModal(teamId, currentGroupId); // Afficher la modale de déplacement
-        });
-    }
-
-    /**
-     * Affiche une modale pour déplacer une équipe vers un autre groupe.
-     * @param {string} teamId L'ID de l'équipe à déplacer.
-     * @param {string} fromGroupId L'ID du groupe d'origine.
-     */
-    function showMoveTeamModal(teamId, fromGroupId) {
-        const team = allTeams.find(t => t.id === teamId);
-        if (!team || !currentSecondaryGroupsPreview.groups) return;
-
-        const otherGroups = Object.values(currentSecondaryGroupsPreview.groups).filter(g => g.id !== fromGroupId);
-
-        if (otherGroups.length === 0) {
-            showToast("Aucun autre groupe disponible pour déplacer l'équipe.", "info");
-            return;
-        }
-
-        const content = document.createElement('div');
-        content.innerHTML = `
-            <p class="mb-4">Déplacer l'équipe <span class="font-bold">${escapeHtml(team.name)}</span> du groupe <span class="font-bold">${escapeHtml(currentSecondaryGroupsPreview.groups[fromGroupId]?.name || 'Inconnu')}</span> vers :</p>
-            <select id="target-group-select" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline mb-4">
-                ${otherGroups.map(group => `<option value="${escapeHtml(group.id)}">Groupe ${escapeHtml(group.name)}</option>`).join('')}
-            </select>
-        `;
-
-        showModal(`Déplacer l'équipe ${escapeHtml(team.name)}`, content, async () => {
-            const targetGroupId = document.getElementById('target-group-select').value;
-            if (targetGroupId) {
-                await moveTeamBetweenSecondaryGroups(teamId, fromGroupId, targetGroupId);
-            }
-        });
-    }
-
-    /**
-     * Déplace une équipe d'un groupe à un autre dans la prévisualisation des groupes secondaires.
-     * @param {string} teamId L'ID de l'équipe à déplacer.
-     * @param {string} fromGroupId L'ID du groupe d'origine.
-     * @param {string} toGroupId L'ID du groupe cible.
-     */
-    async function moveTeamBetweenSecondaryGroups(teamId, fromGroupId, toGroupId) {
-        if (!currentSecondaryGroupsPreview.groups || !currentSecondaryGroupsPreview.groups[fromGroupId] || !currentSecondaryGroupsPreview.groups[toGroupId]) {
-            showToast("Groupes source ou cible invalides.", "error");
-            return;
-        }
-
-        const teamToMove = currentSecondaryGroupsPreview.groups[fromGroupId].teams.find(t => t.id === teamId);
-        if (!teamToMove) {
-            showToast("Équipe non trouvée dans le groupe d'origine.", "error");
-            return;
-        }
-
-        // Retirer l'équipe du groupe d'origine
-        currentSecondaryGroupsPreview.groups[fromGroupId].teams = currentSecondaryGroupsPreview.groups[fromGroupId].teams.filter(t => t.id !== teamId);
-        // Ajouter l'équipe au groupe cible
-        currentSecondaryGroupsPreview.groups[toGroupId].teams.push(teamToMove);
-
-        await saveAllData(); // Sauvegarder la prévisualisation modifiée
-        showToast(`Équipe déplacée vers le groupe ${escapeHtml(currentSecondaryGroupsPreview.groups[toGroupId].name)}.`, "success");
-        renderEliminationSelectionPage(); // Re-render la page pour refléter le changement
-    }
-
-    /**
-     * Valide les groupes secondaires pour la génération de la phase d'élimination.
-     * Crée une nouvelle phase de type `elimination_seeding` avec ces groupes.
-     */
-    async function validateSecondaryGroupsForElimination() {
-        if (!currentTournamentData) {
-            showToast("Aucun tournoi n'est sélectionné ou les données ne sont pas chargées.", "error");
-            return;
-        }
-
-        const groups = currentSecondaryGroupsPreview.groups;
-        const numGroups = Object.keys(groups).length;
-        if (numGroups === 0) {
-            showToast("Aucun groupe n'a été défini pour la phase éliminatoire.", "error");
-            return;
-        }
-
-        // Vérifier que tous les groupes ont le même nombre d'équipes et qu'il y a au moins 2 équipes par groupe
-        let teamsPerGroup = -1;
-        for (const groupId in groups) {
-            if (teamsPerGroup === -1) {
-                teamsPerGroup = groups[groupId].teams.length;
-            } else if (groups[groupId].teams.length !== teamsPerGroup) {
-                showToast("Tous les groupes doivent contenir le même nombre d'équipes.", "error");
-                return;
-            }
-            if (groups[groupId].teams.length < 2) {
-                showToast("Chaque groupe doit contenir au moins 2 équipes.", "error");
-                return;
-            }
-        }
-
-        // Vérifier que toutes les équipes sont uniques et proviennent de allTeams
-        const allTeamIdsInGroups = new Set();
-        for (const groupId in groups) {
-            groups[groupId].teams.forEach(team => {
-                if (allTeamIdsInGroups.has(team.id)) {
-                    showToast(`L'équipe ${escapeHtml(team.name)} est dupliquée dans les groupes.`, "error");
-                    return; // Sortir de la boucle interne
-                }
-                allTeamIdsInGroups.add(team.id);
-                // Vérifier si l'équipe existe dans allTeams
-                if (!allTeams.some(t => t.id === team.id)) {
-                    showToast(`L'équipe ${escapeHtml(team.name)} dans les groupes n'est pas une équipe enregistrée.`, "error");
-                    return; // Sortir de la boucle interne
-                }
-            });
-            if (allTeamIdsInGroups.size !== Object.values(groups).flatMap(g => g.teams).length) {
-                return; // Sortir de la fonction si des doublons ont été trouvés
-            }
-        }
-
-        // Créer une nouvelle phase de type elimination_seeding
-        const newSeedingPhase = {
-            id: `elim_seeding_phase_${Date.now()}`,
-            name: `Groupes Éliminatoires - ${allBrassagePhases.length + 1}`,
-            type: PHASE_TYPE_ELIMINATION_SEEDING,
-            generated: true, // Marqué comme généré car la structure est prête
-            pools: Object.values(groups).map(group => ({
-                id: group.id,
-                name: group.name,
-                teams: group.teams.map(team => team.id), // Stocker seulement les IDs
-                matches: [] // Pas de matchs pour cette phase, juste des groupes
-            })),
-            rankings: [], // Pas de classement direct pour cette phase de seeding
-            createdAt: new Date().toISOString()
-        };
-
-        allBrassagePhases.push(newSeedingPhase);
-        currentDisplayedPhaseId = newSeedingPhase.id; // Afficher cette phase
-        await saveAllData();
-        showToast("Groupes éliminatoires validés et phase de seeding créée ! Vous pouvez maintenant générer les tours éliminatoires.", "success");
-        renderBrassagesPage(); // Re-render la page pour montrer la nouvelle phase
-    }
-
-    /**
-     * Génère les matchs pour une phase d'élimination directe (arbre de tournoi).
-     * @param {string} seedingPhaseId L'ID de la phase de seeding qui contient les groupes.
-     * @param {number} numberOfRounds Le nombre de tours à générer (ex: 1 pour quarts, 2 pour demis, 3 pour finale).
-     */
-    async function validateForDirectElimination(seedingPhaseId, numberOfRounds) {
-        if (!currentTournamentData) {
-            showToast("Aucun tournoi n'est sélectionné ou les données ne sont pas chargées.", "error");
-            return;
-        }
-        const seedingPhase = allBrassagePhases.find(p => p.id === seedingPhaseId && p.type === PHASE_TYPE_ELIMINATION_SEEDING);
-        if (!seedingPhase || !seedingPhase.pools || seedingPhase.pools.length === 0) {
-            showToast("Phase de groupes éliminatoires non trouvée ou vide.", "error");
-            return;
-        }
-
-        // Récupérer toutes les équipes des groupes de seeding
-        let qualifiedTeams = seedingPhase.pools.flatMap(pool => pool.teams);
-        qualifiedTeams = qualifiedTeams.map(teamId => allTeams.find(t => t.id === teamId)).filter(Boolean);
-
-        if (qualifiedTeams.length < 2) {
-            showToast("Pas assez d'équipes qualifiées pour générer les éliminatoires.", "error");
-            return;
-        }
-
-        // Calculer le nombre de matchs par tour
-        // Un tour complet réduit le nombre d'équipes de moitié.
-        // Pour un tournoi à élimination directe, le nombre d'équipes doit être une puissance de 2 (2, 4, 8, 16, etc.)
-        // Si ce n'est pas le cas, il y aura des "byes" (équipes qui avancent sans jouer) ou des déséquilibres.
-        const numTeams = qualifiedTeams.length;
-        let nextPowerOf2 = 1;
-        while (nextPowerOf2 < numTeams) {
-            nextPowerOf2 *= 2;
-        }
-        const numByes = nextPowerOf2 - numTeams;
-
-        // Si numByes > 0, il faut gérer les byes. Pour l'instant, on va juste avertir.
-        if (numByes > 0) {
-            showToast(`Attention: ${numTeams} équipes. Il y aura ${numByes} "byes" (équipes qui passent le premier tour sans jouer) pour former un arbre complet de ${nextPowerOf2} équipes.`, "info", 5000);
-        }
-
-        // Pour la génération, on va simuler un arbre complet avec les équipes qualifiées
-        // et les "byes" si nécessaire.
-        let teamsForBracket = [...qualifiedTeams];
-        // Ajouter des équipes fictives pour les byes si nécessaire
-        for (let i = 0; i < numByes; i++) {
-            teamsForBracket.push({ id: `bye_${i}`, name: `BYE ${i + 1}`, isBye: true });
-        }
-        shuffleArray(teamsForBracket); // Mélanger pour un tirage aléatoire des byes/équipes
-
-        // Initialiser les tours d'élimination
-        eliminationPhases = {}; // Réinitialiser les phases d'élimination existantes
-
-        let currentTeamsInRound = teamsForBracket;
-        let roundCount = 1;
-
-        while (currentTeamsInRound.length >= 2 && roundCount <= numberOfRounds) {
-            const roundId = `round_${roundCount}`;
-            const roundName = `Tour ${roundCount}`;
-            const matchesInRound = [];
-            let nextRoundTeams = [];
-
-            // Créer les matchs pour ce tour
-            for (let i = 0; i < currentTeamsInRound.length; i += 2) {
-                const team1 = currentTeamsInRound[i];
-                const team2 = currentTeamsInRound[i + 1]; // team2 pourrait être undefined si nombre impair, mais on a géré les byes.
-
-                if (team1.isBye) {
-                    // Si la première équipe est un bye, la deuxième équipe avance
-                    nextRoundTeams.push(team2);
-                    continue;
-                } else if (team2.isBye) {
-                    // Si la deuxième équipe est un bye, la première équipe avance
-                    nextRoundTeams.push(team1);
-                    continue;
-                }
-
-                matchesInRound.push({
-                    id: `match_${roundId}_${team1.id}_${team2.id}_${Math.random().toString(36).substring(2, 5)}`,
-                    team1Id: team1.id,
-                    team2Id: team2.id,
-                    score1: undefined,
-                    score2: undefined,
-                    winnerId: null,
-                    loserId: null
-                });
-            }
-
-            eliminationPhases[roundId] = {
-                name: roundName,
-                matches: matchesInRound
-            };
-            currentTeamsInRound = nextRoundTeams; // Les gagnants (ou byes) passent au tour suivant
-            roundCount++;
-        }
-
-        await saveAllData();
-        showToast("Arbre d'élimination directe généré avec succès !", "success");
-        window.location.hash = '#eliminatoires'; // Rediriger vers la page des éliminatoires
-    }
-
-
-    // --- Fonctions d'Import/Export Excel ---
-
-    /**
-     * Importe les scores d'une phase de brassage à partir d'un fichier Excel.
-     * Le format attendu est une feuille avec des colonnes pour Team1, Team2, Score1, Score2.
-     * @param {Array<Array<any>>} jsonData Les données du fichier Excel converties en JSON (array of arrays).
-     */
-    async function importScoresFromExcel(jsonData) {
-        if (!currentDisplayedPhaseId) {
-            showToast("Veuillez sélectionner une phase de brassage à importer.", "error");
-            return;
-        }
-
-        const currentPhase = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId);
-        if (!currentPhase || currentPhase.type === PHASE_TYPE_ELIMINATION_SEEDING) {
-            showToast("La phase sélectionnée n'est pas une phase de brassage valide pour l'importation de scores.", "error");
-            return;
-        }
-
-        if (!jsonData || jsonData.length < 2) { // Au moins l'en-tête et une ligne de données
-            showToast("Fichier Excel vide ou format incorrect.", "error");
-            return;
-        }
-
-        const headers = jsonData[0].map(h => String(h).trim().toLowerCase());
-        const team1ColIndex = headers.indexOf('team1');
-        const team2ColIndex = headers.indexOf('team2');
-        const score1ColIndex = headers.indexOf('score1');
-        const score2ColIndex = headers.indexOf('score2');
-
-        if (team1ColIndex === -1 || team2ColIndex === -1 || score1ColIndex === -1 || score2ColIndex === -1) {
-            showToast("Les colonnes 'Team1', 'Team2', 'Score1', 'Score2' sont requises dans le fichier Excel.", "error");
-            return;
-        }
-
-        let scoresImportedCount = 0;
-        let errorsCount = 0;
-
-        for (let i = 1; i < jsonData.length; i++) { // Commencer à partir de la deuxième ligne (après l'en-tête)
-            const row = jsonData[i];
-            const excelTeam1Name = String(row[team1ColIndex]).trim();
-            const excelTeam2Name = String(row[team2ColIndex]).trim();
-            const excelScore1 = parseInt(row[score1ColIndex], 10);
-            const excelScore2 = parseInt(row[score2ColIndex], 10);
-
-            if (!excelTeam1Name || !excelTeam2Name || isNaN(excelScore1) || isNaN(excelScore2)) {
-                console.warn(`Ligne ${i + 1} ignorée: Données manquantes ou invalides.`, row);
-                errorsCount++;
-                continue;
-            }
-
-            // Trouver les IDs des équipes par leur nom
-            const team1 = allTeams.find(t => t.name.toLowerCase() === excelTeam1Name.toLowerCase());
-            const team2 = allTeams.find(t => t.name.toLowerCase() === excelTeam2Name.toLowerCase());
-
-            if (!team1 || !team2) {
-                console.warn(`Ligne ${i + 1} ignorée: Équipe(s) non trouvée(s) dans la liste des équipes enregistrées. (${excelTeam1Name}, ${excelTeam2Name})`);
-                errorsCount++;
-                continue;
-            }
-
-            let matchFound = false;
-            for (const pool of currentPhase.pools) {
-                for (const match of pool.matches) {
-                    // Vérifier si c'est le bon match (peu importe l'ordre des équipes dans le match)
-                    if ((match.team1Id === team1.id && match.team2Id === team2.id) ||
-                        (match.team1Id === team2.id && match.team2Id === team1.id)) {
-
-                        // Assigner les scores en respectant l'ordre du match
-                        if (match.team1Id === team1.id) {
-                            match.score1 = excelScore1;
-                            match.score2 = excelScore2;
-                        } else { // match.team1Id === team2.id
-                            match.score1 = excelScore2;
-                            match.score2 = excelScore1;
-                        }
-                        matchFound = true;
-                        scoresImportedCount++;
-                        break; // Match trouvé, passer au suivant
-                    }
-                }
-                if (matchFound) break;
-            }
-
-            if (!matchFound) {
-                console.warn(`Ligne ${i + 1} ignorée: Match entre ${excelTeam1Name} et ${excelTeam2Name} non trouvé dans la phase actuelle.`, row);
-                errorsCount++;
-            }
-        }
-
-        if (scoresImportedCount > 0) {
-            // Marquer la phase comme générée si tous les scores sont entrés (et donc la phase est complète)
-            // Recalculer les classements après l'importation
-            currentPhase.pools.forEach(pool => {
-                const teamStats = {};
-                pool.teams.forEach(teamId => {
-                    teamStats[teamId] = { points: 0, setsWon: 0, setsLost: 0, matchesPlayed: 0, matchesWon: 0 };
-                });
-
-                pool.matches.forEach(match => {
-                    if (match.score1 !== undefined && match.score2 !== undefined) {
-                        const score1 = match.score1;
-                        const score2 = match.score2;
-                        const diff = Math.abs(score1 - score2);
-
-                        const team1Stats = teamStats[match.team1Id];
-                        const team2Stats = teamStats[match.team2Id];
-
-                        if (team1Stats) {
-                            team1Stats.matchesPlayed++;
-                            team1Stats.setsWon += score1;
-                            team1Stats.setsLost += score2;
-                            if (score1 > score2) team1Stats.points += 8;
-                            else if (score2 > score1) {
-                                if (diff >= 1 && diff <= 3) team1Stats.points += 4;
-                                else if (diff >= 4 && diff <= 6) team1Stats.points += 3;
-                                else if (diff >= 7 && diff <= 9) team1Stats.points += 2;
-                                else if (diff >= 10) team1Stats.points += 1;
-                            }
-                        }
-                        if (team2Stats) {
-                            team2Stats.matchesPlayed++;
-                            team2Stats.setsWon += score2;
-                            team2Stats.setsLost += score1;
-                            if (score2 > score1) team2Stats.points += 8;
-                            else if (score1 > score2) {
-                                if (diff >= 1 && diff <= 3) team2Stats.points += 4;
-                                else if (diff >= 4 && diff <= 6) team2Stats.points += 3;
-                                else if (diff >= 7 && diff <= 9) team2Stats.points += 2;
-                                else if (diff >= 10) team2Stats.points += 1;
-                            }
-                        }
-                    }
-                });
-
-                pool.rankings = Object.entries(teamStats).map(([teamId, stats]) => {
-                    const team = allTeams.find(t => t.id === teamId);
-                    return {
-                        teamId: teamId,
-                        teamName: team ? team.name : 'Inconnu',
-                        ...stats,
-                        setRatio: stats.setsLost > 0 ? stats.setsWon / stats.setsLost : stats.setsWon // ratio sets
-                    };
-                });
-
-                pool.rankings.sort((a, b) => {
-                    if (b.points !== a.points) return b.points - a.points;
-                    if (b.matchesWon !== a.matchesWon) return b.matchesWon - a.matchesWon;
-                    return b.setRatio - a.setRatio;
-                });
-            });
-
-            currentPhase.generated = isBrassagePhaseComplete(currentDisplayedPhaseId); // Marquer comme généré si tous les scores sont là
-            await saveAllData();
-            showToast(`${scoresImportedCount} scores importés avec succès. ${errorsCount > 0 ? `(${errorsCount} erreurs)` : ''}`, "success");
-            renderBrassagesPage(); // Re-render pour afficher les scores et le statut mis à jour
-        } else {
-            showToast(`Aucun score n'a pu être importé. ${errorsCount > 0 ? `(${errorsCount} erreurs)` : ''}`, "error");
-        }
-    }
-
-    /**
-     * Exporte les scores de la phase de brassage actuellement affichée vers un fichier Excel.
-     */
-    function exportScoresToExcel() {
-        if (!currentDisplayedPhaseId) {
-            showToast("Veuillez sélectionner une phase de brassage à exporter.", "error");
-            return;
-        }
-
-        const currentPhase = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId);
-        if (!currentPhase || currentPhase.type === PHASE_TYPE_ELIMINATION_SEEDING || !currentPhase.pools) {
-            showToast("La phase sélectionnée n'est pas une phase de brassage valide pour l'exportation de scores.", "error");
-            return;
-        }
-
-        const exportData = [];
-        exportData.push(['Team1', 'Team2', 'Score1', 'Score2']); // En-têtes
-
-        currentPhase.pools.forEach(pool => {
-            pool.matches.forEach(match => {
-                const team1Name = allTeams.find(t => t.id === match.team1Id)?.name || 'Inconnu';
-                const team2Name = allTeams.find(t => t.id === match.team2Id)?.name || 'Inconnu';
-                exportData.push([
-                    team1Name,
-                    team2Name,
-                    match.score1 !== undefined ? match.score1 : '',
-                    match.score2 !== undefined ? match.score2 : ''
-                ]);
-            });
-        });
-
-        if (exportData.length <= 1) { // Seulement les en-têtes
-            showToast("Aucun match avec des scores à exporter dans cette phase.", "info");
-            return;
-        }
-
-        const ws = XLSX.utils.aoa_to_sheet(exportData);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Scores");
-
-        const fileName = `Scores_Brassage_${currentPhase.name.replace(/\s/g, '_')}_${new Date().toISOString().slice(0, 10)}.xlsx`;
-        XLSX.writeFile(wb, fileName);
-        showToast("Scores exportés avec succès au format Excel !", "success");
-    }
     // --- Fonctions de Rendu des Pages (Vues) ---
 
     /**
-     * Rend la page d'accueil de l'application.
+     * Affiche la page d'authentification (connexion/inscription).
+     */
+    function renderAuthPage() {
+        APP_CONTAINER.innerHTML = `
+            <div class="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
+                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Connexion / Inscription</h1>
+                <div class="mb-4">
+                    <label for="authEmail" class="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input type="email" id="authEmail" placeholder="votre.email@example.com"
+                           class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                </div>
+                <div class="mb-6">
+                    <label for="authPassword" class="block text-sm font-medium text-gray-700 mb-1">Mot de passe</label>
+                    <input type="password" id="authPassword" placeholder="********"
+                           class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                </div>
+                <div class="flex flex-col space-y-3">
+                    <button id="loginBtn"
+                            class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Se connecter
+                    </button>
+                    <button id="registerBtn"
+                            class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        S'inscrire
+                    </button>
+                </div>
+                <p id="authMessage" class="mt-4 text-sm text-center text-red-500"></p>
+            </div>
+        `;
+        setupAuthPageLogic();
+    }
+
+    /**
+     * Logique de la page d'authentification.
+     */
+    function setupAuthPageLogic() {
+        const authEmailInput = document.getElementById('authEmail');
+        const authPasswordInput = document.getElementById('authPassword');
+        const loginBtn = document.getElementById('loginBtn');
+        const registerBtn = document.getElementById('registerBtn');
+        const authMessage = document.getElementById('authMessage');
+
+        loginBtn.addEventListener('click', async () => {
+            const email = authEmailInput.value.trim();
+            const password = authPasswordInput.value.trim();
+            if (!email || !password) {
+                authMessage.textContent = "Veuillez entrer un email et un mot de passe.";
+                return;
+            }
+            try {
+                await window.signInWithEmailAndPassword(window.auth, email, password);
+                showToast("Connexion réussie !", "success");
+                authMessage.textContent = "";
+                // Redirection gérée par onAuthStateChanged -> loadAllData -> handleLocationHash
+            } catch (error) {
+                console.error("Erreur de connexion:", error);
+                authMessage.textContent = "Erreur de connexion: " + error.message;
+                showToast("Erreur de connexion: " + error.message, "error");
+            }
+        });
+
+        registerBtn.addEventListener('click', async () => {
+            const email = authEmailInput.value.trim();
+            const password = authPasswordInput.value.trim();
+            if (!email || !password) {
+                authMessage.textContent = "Veuillez entrer un email et un mot de passe.";
+                return;
+            }
+            if (password.length < 6) {
+                authMessage.textContent = "Le mot de passe doit contenir au moins 6 caractères.";
+                return;
+            }
+            try {
+                await window.createUserWithEmailAndPassword(window.auth, email, password);
+                showToast("Inscription réussie ! Vous êtes maintenant connecté.", "success");
+                authMessage.textContent = "";
+                // Redirection gérée par onAuthStateChanged -> loadAllData -> handleLocationHash
+            } catch (error) {
+                console.error("Erreur d'inscription:", error);
+                authMessage.textContent = "Erreur d'inscription: " + error.message;
+                showToast("Erreur d'inscription: " + error.message, "error");
+            }
+        });
+    }
+
+    /**
+     * Affiche la page d'accueil du tournoi.
      */
     function renderHomePage() {
-        if (!APP_CONTAINER) {
-            console.error("APP_CONTAINER non trouvé.");
-            return;
-        }
-        APP_CONTAINER.innerHTML = ''; // Vider le contenu précédent
-
-        const contentDiv = document.createElement('div');
-        contentDiv.className = "max-w-5xl mx-auto py-8 px-4 sm:px-6 lg:px-8";
-
-        if (window.userId) { // Si l'utilisateur est connecté
-            if (window.currentTournamentData && window.currentTournamentData.id !== 'simulation') { // Si un tournoi réel est sélectionné
-                contentDiv.innerHTML = `
-                    <h1 class="text-4xl font-extrabold text-center text-blue-700 mb-8 leading-tight">
-                        Bienvenue sur EasyPlay !
-                    </h1>
-                    <p class="text-xl text-gray-700 text-center mb-6">
-                        Vous gérez actuellement le tournoi : <span class="font-semibold text-blue-600">${escapeHtml(window.currentTournamentData.name)}</span>.
-                        Utilisez les onglets à gauche pour naviguer et gérer votre tournoi.
-                    </p>
-                    <div class="text-center mt-8 space-x-4">
-                        <button onclick="window.location.hash='#equipes'" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                            Gérer les équipes
-                        </button>
-                        <button onclick="window.location.hash='#brassages'" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                            Gérer les brassages
-                        </button>
-                    </div>
-                `;
-            } else { // Si connecté mais aucun tournoi réel sélectionné (ou en mode simulation par défaut)
-                contentDiv.innerHTML = `
-                    <h1 class="text-4xl font-extrabold text-center text-blue-700 mb-8 leading-tight">
-                        Bienvenue sur EasyPlay !
-                    </h1>
-                    <p class="text-xl text-gray-700 text-center mb-6">
-                        Vous êtes actuellement en <span class="font-semibold text-purple-600">mode simulation</span> (max ${MAX_SIMULATION_TEAMS} équipes).
-                        Pour gérer des tournois réels avec plus d'équipes, veuillez créer ou sélectionner un tournoi.
-                    </p>
-                    <div class="text-center mt-8 space-x-4">
-                        <button onclick="window.location.hash='#tournaments'" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                            Gérer mes tournois
-                        </button>
-                        <button onclick="window.location.hash='#equipes'" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                            Commencer la simulation
-                        </button>
-                    </div>
-                `;
-            }
-        } else { // Si l'utilisateur n'est pas connecté
-            contentDiv.innerHTML = `
+        APP_CONTAINER.innerHTML = `
+            <div class="max-w-5xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
                 <h1 class="text-4xl font-extrabold text-center text-blue-700 mb-8 leading-tight">
                     Marre des casse-têtes<img src="Images/explosion.png" alt="emoji casse-tête" class="inline-block w-12 h-12 align-middle mx-1">pour organiser vos tournois ?<br>
                     Cette App est là pour simplifier la vie des organisateurs de tournois !<img src="Images/content.png" alt="emoji casse-tête" class="inline-block w-15 h-12 align-middle mx-1">
@@ -2147,1574 +2240,2540 @@
                 <p class="text-2xl text-center font-extrabold text-blue-700 mt-12">
                     Prêt(e) à révolutionner vos tournois ? Accroche-toi, l'aventure commence maintenant ! <img src="Images/voila.png" alt="emoji casse-tête" class="inline-block w-12 h-12 align-middle mx-1">
                 </p>
-                <div class="text-center mt-8">
-                    <button onclick="window.location.hash='#auth'" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                        Se connecter / S'inscrire
-                    </button>
-                </div>
-            `;
-        }
-        APP_CONTAINER.appendChild(contentDiv);
-    }
-
-    /**
-     * Rend la page d'authentification (connexion/inscription).
-     */
-    function renderAuthPage() {
-        if (!APP_CONTAINER) {
-            console.error("APP_CONTAINER non trouvé dans renderAuthPage.");
-            return;
-        }
-        APP_CONTAINER.innerHTML = `
-            <div class="max-w-md w-full bg-white p-8 rounded-lg shadow-md mt-10 mx-auto">
-                <h2 class="text-2xl font-bold text-center text-blue-600 mb-6" id="auth-header">Connexion</h2>
-                <form id="auth-form">
-                    <div class="mb-4">
-                        <label for="email" class="block text-gray-700 text-sm font-bold mb-2">Email:</label>
-                        <input type="email" id="email" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-                    </div>
-                    <div class="mb-6">
-                        <label for="password" class="block text-gray-700 text-sm font-bold mb-2">Mot de passe:</label>
-                        <input type="password" id="password" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-aight focus:outline-none focus:shadow-outline" required>
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <button type="submit" id="auth-submit-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline transition duration-150">
-                            Se connecter
-                        </button>
-                        <button type="button" id="toggle-auth-mode" class="inline-block align-baseline font-bold text-sm text-blue-500 hover:text-blue-800 transition duration-150">
-                            Créer un compte
-                        </button>
-                    </div>
-                </form>
             </div>
         `;
-        setupAuthPageLogic(); // This must be called AFTER content is in DOM
     }
 
-    /**
-     * Rend le tableau de bord des tournois.
-     */
-    function renderTournamentDashboard() {
-        if (!APP_CONTAINER) {
-            console.error("APP_CONTAINER non trouvé.");
-            return;
-        }
-
-        const noTournamentsMessage = `
-            <div class="text-center py-8">
-                <p class="text-lg text-gray-600 mb-4">Vous n'avez pas encore de tournoi.</p>
-                <button id="show-create-tournament-form" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                    Créer un nouveau tournoi
-                </button>
-            </div>
-        `;
-
-        if (!window.allUserTournaments || window.allUserTournaments.length === 0) {
-            APP_CONTAINER.innerHTML = noTournamentsMessage;
-            document.getElementById('show-create-tournament-form')?.addEventListener('click', () => {
-                const createFormDiv = document.createElement('div');
-                createFormDiv.innerHTML = `
-                    <div class="max-w-md w-full bg-white p-8 rounded-lg shadow-md mt-10 mx-auto">
-                        <h3 class="text-xl font-bold text-blue-600 mb-4">Créer un nouveau tournoi</h3>
-                        <form id="create-tournament-form">
-                            <div class="mb-4">
-                                <label for="new-tournament-name" class="block text-gray-700 text-sm font-bold mb-2">Nom du tournoi:</label>
-                                <input type="text" id="new-tournament-name" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-                            </div>
-                            <div class="mb-4">
-                                <label for="new-tournament-date" class="block text-gray-700 text-sm font-bold mb-2">Date (AAAA-MM-JJ):</label>
-                                <input type="date" id="new-tournament-date" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-                            </div>
-                            <div class="mb-6">
-                                <label for="new-tournament-num-teams" class="block text-gray-700 text-sm font-bold mb-2">Nombre d'équipes prévues:</label>
-                                <input type="number" id="new-tournament-num-teams" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" min="2" required>
-                            </div>
-                            <div class="flex justify-end space-x-3">
-                                <button type="button" id="cancel-create-tournament" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded transition duration-150">
-                                    Annuler
-                                </button>
-                                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                                    Créer
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                `;
-                APP_CONTAINER.innerHTML = ''; // Clear previous message before adding form
-                APP_CONTAINER.appendChild(createFormDiv);
-                setupTournamentDashboardLogic(); // Re-attach logic for new form
-            });
-            return;
-        }
-
-        let tournamentsListHtml = `
-            <h2 class="text-2xl font-bold text-blue-600 mb-6 text-center">Vos Tournois</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        `;
-
-        window.allUserTournaments.sort((a, b) => {
-            const dateA = a.createdAt ? (a.createdAt.toDate ? a.createdAt.toDate() : new Date(a.createdAt)) : new Date(0);
-            const dateB = b.createdAt ? (b.createdAt.toDate ? b.createdAt.toDate() : new Date(b.createdAt)) : new Date(0);
-            return dateB - dateA; // Tri par date de création décroissante
-        });
-
-
-        window.allUserTournaments.forEach(tournament => {
-            const isActive = window.currentTournamentId === tournament.id;
-            const createdDate = tournament.createdAt ? (tournament.createdAt.toDate ? tournament.createdAt.toDate().toLocaleDateString() : new Date(tournament.createdAt).toLocaleDateString()) : 'N/A';
-            tournamentsListHtml += `
-                <div class="bg-white p-6 rounded-lg shadow-md flex flex-col ${isActive ? 'border-4 border-blue-500' : ''}">
-                    <h3 class="text-xl font-semibold mb-2">${escapeHtml(tournament.name)}</h3>
-                    <p class="text-gray-600 mb-1">Date: ${escapeHtml(tournament.date)}</p>
-                    <p class="text-gray-600 mb-4">Créé le: ${createdDate}</p>
-                    <p class="text-gray-600 mb-4">Équipes prévues: ${escapeHtml(String(tournament.numTeamsAllowed))}</p>
-                    <div class="flex flex-col mt-auto space-y-2">
-                        <button data-tournament-id="${tournament.id}" class="select-tournament-btn bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded transition duration-150 ${isActive ? 'opacity-50 cursor-not-allowed' : ''}" ${isActive ? 'disabled' : ''}>
-                            ${isActive ? 'Actif' : 'Sélectionner'}
-                        </button>
-                        <button data-tournament-id="${tournament.id}" class="delete-tournament-btn bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition duration-150">
-                            Supprimer
-                        </button>
-                    </div>
-                </div>
-            `;
-        });
-        tournamentsListHtml += `</div>
-            <div class="text-center mt-6">
-                <button id="show-create-tournament-form" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                    Créer un nouveau tournoi
-                </button>
-            </div>
-        `;
-        APP_CONTAINER.innerHTML = tournamentsListHtml;
-        setupTournamentDashboardLogic(); // Pour attacher les écouteurs d'événements
-    }
 
     function renderEquipesPage() {
-        if (!APP_CONTAINER || !window.currentTournamentData) {
-            console.error("APP_CONTAINER ou currentTournamentData non trouvé.");
-            return;
-        }
-
-        const maxTeams = window.currentTournamentData.numTeamsAllowed;
-        const currentTeamCount = window.allTeams.length;
-        const canAddMoreTeams = currentTeamCount < maxTeams;
-
         // Calculate team count by level
         let levelCounts = {};
-        window.allTeams.forEach(team => {
+        allTeams.forEach(team => {
             levelCounts[team.level] = (levelCounts[team.level] || 0) + 1;
         });
 
-        // Generate level distribution HTML
-        let levelDistributionHtml = '';
+        // Build HTML for level counts display
+        let levelCountsHtml = '';
         if (Object.keys(levelCounts).length > 0) {
-            levelDistributionHtml = `
-                <div class="bg-white p-4 rounded-lg shadow-md mb-6">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-3">Répartition des équipes par niveau:</h3>
-                    <ul class="list-disc list-inside space-y-1">
-                        ${Object.keys(levelCounts).sort((a, b) => a - b).map(level => `
-                            <li>Niveau ${escapeHtml(level)}: <span class="font-bold">${levelCounts[level]}</span> équipe(s)</li>
-                        `).join('')}
-                    </ul>
-                </div>
-            `;
+            levelCountsHtml += '<div class="mt-2 text-sm text-gray-600 space-y-1">';
+            // Sort levels numerically for ordered display
+            Object.keys(levelCounts).sort((a, b) => parseInt(a) - parseInt(b)).forEach(level => {
+                const count = levelCounts[level];
+                levelCountsHtml += `<p>Niveau ${escapeHtml(level)}: <span class="font-bold">${count}</span> équipe${count > 1 ? 's' : ''}</p>`;
+            });
+            levelCountsHtml += '</div>';
+        } else {
+            levelCountsHtml = '<p class="mt-2 text-sm text-gray-600">Aucun niveau d\'équipe défini.</p>';
         }
 
-        let teamsHtml = `
-            <h2 class="text-2xl font-bold text-blue-600 mb-6 text-center">Gérer les Équipes</h2>
-            <div class="mb-6 bg-white p-4 rounded-lg shadow-md">
-                <p class="text-gray-700">Nombre d'équipes enregistrées : <span class="font-bold">${currentTeamCount}</span> / ${maxTeams}</p>
-                ${!canAddMoreTeams ? `<p class="text-red-500 text-sm mt-2">Vous avez atteint le nombre maximum d'équipes pour ce tournoi (${maxTeams}).</p>` : ''}
-            </div>
-            ${levelDistributionHtml}
-            <form id="add-team-form" class="mb-8 bg-white p-6 rounded-lg shadow-md ${!canAddMoreTeams ? 'opacity-50 pointer-events-none' : ''}">
-                <h3 class="text-xl font-bold text-blue-600 mb-4">Ajouter une nouvelle équipe</h3>
-                <div class="mb-4">
-                    <label for="team-name" class="block text-gray-700 text-sm font-bold mb-2">Nom de l'équipe:</label>
-                    <input type="text" id="team-name" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-                </div>
-                <div class="mb-6">
-                    <label for="team-level" class="block text-gray-700 text-sm font-bold mb-2">Niveau (1-10, 1 étant le plus fort):</label>
-                    <input type="number" id="team-level" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" min="1" max="10" value="5" required>
-                </div>
-                <div class="flex justify-end">
-                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline transition duration-150">
-                        Ajouter l'équipe
-                    </button>
-                </div>
-            </form>
+        APP_CONTAINER.innerHTML = `
+            <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Gestion des Équipes</h1>
 
-            <div class="w-full">
-                <h3 class="text-xl font-bold text-blue-600 mb-4">Liste des équipes</h3>
-                ${window.allTeams.length === 0 ? `<p class="text-gray-600">Aucune équipe enregistrée pour l'instant.</p>` : `
-                    <div class="bg-white rounded-lg shadow-md overflow-hidden">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nom de l'équipe</th>
-                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Niveau</th>
-                                    <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                ${window.allTeams.map(team => `
-                                    <tr data-team-id="${escapeHtml(team.id || '')}">
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${escapeHtml(team.name)}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${escapeHtml(String(team.level))}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                            <button data-team-id="${escapeHtml(team.id || '')}" class="edit-team-btn text-indigo-600 hover:text-indigo-900 mr-4">
-                                                Modifier
-                                            </button>
-                                            <button data-team-id="${escapeHtml(team.id || '')}" class="delete-team-btn text-red-600 hover:text-red-900">
-                                                Supprimer
-                                            </button>
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
+            <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter une Nouvelle Équipe</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                    <div>
+                        <label for="teamName" class="block text-sm font-medium text-gray-700 mb-1">Nom de l'équipe</label>
+                        <input type="text" id="teamName" placeholder="Nom de l'équipe"
+                               class="w-96 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
                     </div>
-                `}
-            </div>
-        `;
-        APP_CONTAINER.innerHTML = teamsHtml;
-        setupEquipesPageLogic(); // Attacher les écouteurs d'événements
-    }
-
-    /**
-     * Rend la page de gestion des brassages.
-     */
-    function renderBrassagesPage() {
-        if (!APP_CONTAINER || !window.currentTournamentData) {
-            console.error("APP_CONTAINER ou currentTournamentData non trouvé.");
-            return;
-        }
-
-        const teamsCount = window.allTeams.length;
-        const minimumTeamsForBrassage = 4; // Minimum 4 équipes pour commencer les brassages
-
-        // Vérifiez s'il existe une phase "secondary_brassage" ou "elimination_seeding"
-        const hasAdvancedPhases = window.allBrassagePhases.some(p =>
-            p.type === window.PHASE_TYPE_SECONDARY_BRASSAGE ||
-            p.type === window.PHASE_TYPE_ELIMINATION_SEEDING
-        );
-        const lastPhase = window.allBrassagePhases[window.allBrassagePhases.length - 1];
-        const canClearPhases = window.allBrassagePhases.length > 0;
-        const canGenerateInitialBrassage = teamsCount >= minimumTeamsForBrassage && !hasAdvancedPhases;
-        const canGenerateSecondaryBrassage = teamsCount >= minimumTeamsForBrassage && lastPhase && lastPhase.generated && !hasAdvancedPhases;
-        const canGenerateEliminationSeeding = teamsCount >= minimumTeamsForBrassage && lastPhase && lastPhase.generated && !hasAdvancedPhases;
-
-        let brassageHtml = `
-            <h2 class="text-2xl font-bold text-blue-600 mb-6 text-center">Gérer les Brassages</h2>
-            <div class="bg-white p-6 rounded-lg shadow-md mb-6">
-                <p class="text-gray-700 mb-4">
-                    Nombre d'équipes enregistrées : <span class="font-bold">${teamsCount}</span>.
-                    ${teamsCount < minimumTeamsForBrassage ? `<span class="text-red-500">Un minimum de ${minimumTeamsForBrassage} équipes est requis pour générer les brassages.</span>` : ''}
-                </p>
-                <div class="flex flex-wrap gap-4 justify-center">
-                    <button id="generate-initial-brassage" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150 ${!canGenerateInitialBrassage ? 'opacity-50 cursor-not-allowed' : ''}" ${!canGenerateInitialBrassage ? 'disabled' : ''}>
-                        Générer Brassage Initial
-                    </button>
-                    <button id="generate-secondary-brassage" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition duration-150 ${!canGenerateSecondaryBrassage ? 'opacity-50 cursor-not-allowed' : ''}" ${!canGenerateSecondaryBrassage ? 'disabled' : ''}>
-                        Générer Brassage Secondaire
-                    </button>
-                    <button id="generate-elimination-seeding" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded transition duration-150 ${!canGenerateEliminationSeeding ? 'opacity-50 cursor-not-allowed' : ''}" ${!canGenerateEliminationSeeding ? 'disabled' : ''}>
-                        Générer Groupes Éliminatoires
-                    </button>
-                    <button id="clear-all-brassage-phases" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition duration-150 ${!canClearPhases ? 'opacity-50 cursor-not-allowed' : ''}" ${!canClearPhases ? 'disabled' : ''}>
-                        Effacer toutes les phases
-                    </button>
-                </div>
-            </div>
-
-            <div class="w-full">
-                <h3 class="text-xl font-bold text-blue-600 mb-4">Phases de Brassage</h3>
-                ${window.allBrassagePhases.length === 0 ? `<p class="text-gray-600">Aucune phase de brassage générée pour l'instant.</p>` : `
-                    <div class="space-y-4">
-                        ${window.allBrassagePhases.map(phase => `
-                            <div class="bg-white p-4 rounded-lg shadow-md">
-                                <div class="flex justify-between items-center mb-2">
-                                    <h4 class="text-lg font-semibold text-gray-800">${escapeHtml(phase.name)}</h4>
-                                    <div class="flex items-center space-x-2">
-                                        <span class="text-sm text-gray-600">Type: ${phase.type === window.PHASE_TYPE_INITIAL ? 'Initial' : phase.type === window.PHASE_TYPE_SECONDARY_BRASSAGE ? 'Secondaire' : 'Éliminatoires'}</span>
-                                        <button data-phase-id="${escapeHtml(phase.id)}" class="view-phase-btn bg-gray-200 hover:bg-gray-300 text-gray-800 text-sm py-1 px-3 rounded transition duration-150">
-                                            ${window.currentDisplayedPhaseId === phase.id ? 'Masquer' : 'Voir'}
-                                        </button>
-                                    </div>
-                                </div>
-                                ${phase.generated ? `
-                                    <p class="text-sm text-green-600">Statut: Généré</p>
-                                ` : `
-                                    <p class="text-sm text-red-600">Statut: En attente</p>
-                                `}
-                            </div>
-                        `).join('')}
+                    <div>
+                        <label for="teamLevel" class="block text-sm font-medium text-gray-700 mb-1">Niveau (1-10)</label>
+                        <input type="number" id="teamLevel" min="1" max="10" value="5"
+                               class="w-96 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
                     </div>
-                `}
-            </div>
-
-            <div id="brassage-details-container" class="w-full mt-8">
-                ${window.currentDisplayedPhaseId ? `
-                    <h3 class="text-xl font-bold text-blue-600 mb-4">Détails de la phase : ${escapeHtml(window.allBrassagePhases.find(p => p.id === window.currentDisplayedPhaseId)?.name || '')}
-                        <span id="repeatedMatchesCount" class="text-sm text-gray-500 ml-2">(Chargement...)</span>
-                        <label class="inline-flex items-center ml-4 text-sm text-gray-700">
-                            <input type="checkbox" id="toggleRepeatedMatchesDisplay" class="form-checkbox h-4 w-4 text-blue-600">
-                            <span class="ml-2">Afficher répétitions</span>
-                        </label>
-                    </h3>
-                    <div id="current-phase-content"></div>
-                    <div class="mt-4 flex flex-wrap gap-3">
-                        <button id="save-matches-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                            Enregistrer les matchs et scores
+                    <div class="md:col-span-2">
+                        <button id="addTeamBtn"
+                                class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                            Ajouter l'équipe
                         </button>
-                        ${window.allBrassagePhases.find(p => p.id === window.currentDisplayedPhaseId)?.type === window.PHASE_TYPE_ELIMINATION_SEEDING ? `
-                            <button id="validate-groups-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                                Valider les groupes pour Éliminatoires
-                            </button>
-                            <button id="reset-elimination-groups-btn" class="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded transition duration-150">
-                                Réinitialiser Groupes Éliminatoires
-                            </button>
-                        ` : ''}
-                        ${window.allBrassagePhases.find(p => p.id === window.currentDisplayedPhaseId)?.type !== window.PHASE_TYPE_ELIMINATION_SEEDING && window.allBrassagePhases.find(p => p.id === window.currentDisplayedPhaseId)?.generated ? `
-                            <button id="import-scores-btn" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded transition duration-150">
-                                Importer Scores (.xlsx)
-                            </button>
-                            <input type="file" id="import-scores-file-input" class="hidden" accept=".xlsx,.xls">
-                            <button id="export-scores-btn" class="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded transition duration-150">
-                                Exporter Scores (.xlsx)
-                            </button>
-                        ` : ''}
                     </div>
-                ` : ``}
-            </div>
-        `;
-        APP_CONTAINER.innerHTML = brassageHtml;
-        setupBrassagesPageLogic(); // Attacher les écouteurs d'événements
-        // Rendre les détails de la phase si currentDisplayedPhaseId est défini
-        if (window.currentDisplayedPhaseId) {
-            window.renderCurrentBrassagePhaseDetails();
-        }
-    }
-
-    /**
-     * Rend les détails de la phase de brassage actuellement sélectionnée.
-     * Cette fonction est appelée par `renderBrassagesPage` et par les gestionnaires d'événements.
-     */
-    function renderCurrentBrassagePhaseDetails() {
-        const detailsContainer = document.getElementById('current-phase-content');
-        if (!detailsContainer || !window.currentDisplayedPhaseId) {
-            if (detailsContainer) detailsContainer.innerHTML = ''; // Clear if no phase selected
-            return;
-        }
-
-        const currentPhase = window.allBrassagePhases.find(p => p.id === window.currentDisplayedPhaseId);
-        if (!currentPhase) {
-            detailsContainer.innerHTML = `<p class="text-red-500">Phase introuvable.</p>`;
-            return;
-        }
-
-        if (currentPhase.type === window.PHASE_TYPE_ELIMINATION_SEEDING) {
-            window.renderSecondaryGroupsPreview(); // Utilise la fonction de rendu spécifique
-            window.updateRepeatedMatchesCountDisplay(); // S'assure que le compteur est mis à jour (même si moins pertinent ici)
-            return;
-        }
-
-        if (!currentPhase.generated || !currentPhase.pools || currentPhase.pools.length === 0) {
-            detailsContainer.innerHTML = `<p class="text-gray-600">La phase "${escapeHtml(currentPhase.name)}" n'a pas encore été générée ou ne contient pas de poules.</p>`;
-            window.updateRepeatedMatchesCountDisplay();
-            return;
-        }
-
-        let poolsHtml = '';
-        currentPhase.pools.forEach((pool, poolIndex) => {
-            poolsHtml += `
-                <div class="bg-white p-6 rounded-lg shadow-md mb-6">
-                    <h4 class="text-lg font-bold text-gray-800 mb-4">Poule ${String.fromCharCode(65 + poolIndex)}</h4>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-                        ${pool.teams.map(teamId => {
-                            const team = window.allTeams.find(t => t.id === teamId);
-                            return team ? `<span class="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">${escapeHtml(team.name)}</span>` : '';
-                        }).join('')}
-                    </div>
-                    ${pool.matches && pool.matches.length > 0 ? `
-                        <div class="space-y-4">
-                            ${pool.matches.map(match => {
-                                const team1 = window.allTeams.find(t => t.id === match.team1Id);
-                                const team2 = window.allTeams.find(t => t.id === match.team2Id);
-                                const isRepeated = window.isMatchRepeated(match.team1Id, match.team2Id, window.currentDisplayedPhaseId);
-                                const repeatedClass = isRepeated ? 'border-2 border-red-500' : '';
-                                const repeatedWarning = isRepeated ? `<span class="text-red-500 text-xs ml-2 cursor-pointer" onclick="window.showRepeatedMatchDetailsModal('${escapeHtml(team1?.name || '')}', '${escapeHtml(team2?.name || '')}', '${escapeHtml(match.team1Id)}', '${escapeHtml(match.team2Id)}', '${escapeHtml(window.currentDisplayedPhaseId)}')">(Répété)</span>` : '';
-                                const showRepeats = document.getElementById('toggleRepeatedMatchesDisplay')?.checked;
-
-                                if (isRepeated && !showRepeats) return ''; // Hide repeated matches if toggle is off
-
-                                return `
-                                    <div class="flex items-center space-x-2 bg-gray-50 p-3 rounded-md ${repeatedClass}">
-                                        <span class="font-medium flex-1 text-right">${escapeHtml(team1?.name || 'Inconnu')}</span>
-                                        <input type="number" data-team-id="${escapeHtml(match.team1Id)}" data-match-id="${escapeHtml(match.id)}" class="match-score-input w-16 px-2 py-1 border rounded text-center" value="${match.score1 !== undefined ? match.score1 : ''}" min="0">
-                                        <span class="font-bold">-</span>
-                                        <input type="number" data-team-id="${escapeHtml(match.team2Id)}" data-match-id="${escapeHtml(match.id)}" class="match-score-input w-16 px-2 py-1 border rounded text-center" value="${match.score2 !== undefined ? match.score2 : ''}" min="0">
-                                        <span class="font-medium flex-1 text-left">${escapeHtml(team2?.name || 'Inconnu')}</span>
-                                        ${repeatedWarning}
-                                    </div>
-                                `;
-                            }).join('')}
-                        </div>
-                    ` : `<p class="text-gray-600">Aucun match généré pour cette poule.</p>`}
                 </div>
-            `;
-        });
-        detailsContainer.innerHTML = poolsHtml;
-        window.updateRepeatedMatchesCountDisplay();
-        setupBrassagePhaseDetailsLogic(); // Attacher les écouteurs d'événements
+                <p id="message" class="mt-3 text-sm text-center"></p>
+            </section>
+
+            <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">Importer des Équipes depuis Excel</h2>
+                <div class="flex flex-col sm:flex-row items-center gap-4">
+                    <input type="file" id="excelFileInput" accept=".xlsx, .xls" class="block w-full text-sm text-gray-700
+                        file:mr-4 file:py-2 file:px-4
+                        file:rounded-md file:border-0
+                        file:text-sm file:font-semibold
+                        file:bg-blue-50 file:text-blue-700
+                        hover:file:bg-blue-100" />
+                    <button id="importTeamsBtn"
+                            class="w-full sm:w-auto bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Importer les équipes
+                    </button>
+                </div>
+                <p class="text-xs text-gray-600 mt-2">
+                    - Le fichier Excel doit contenir deux colonnes : "Nom" (pour le nom de l'équipe) et "Niveau" (pour le niveau de l'équipe, de 1 à 10).				
+                </p>
+				<p class="text-xs text-gray-600 mt-2">
+                    - Selon le nombre d'équipes que vous souhaitez mettre dans chaque poule des brassages, ajustez les niveaux des équipes dans le fichier Excel: Pour N équipes par poule, attribuez des niveaux de 1 à N, en veillant à avoir le même nombre d'équipes de chaque niveau.				
+                </p>
+                <p id="importMessage" class="mt-3 text-sm text-center"></p>
+            </section>
+
+            <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">
+                    Équipes Actuelles (<span id="teamCountDisplay">0</span>)
+                </h2>
+                ${levelCountsHtml} <!-- Added level counts display here -->
+                <div id="teamsList" class="space-y-4">
+                    <!-- Les équipes seront listées ici -->
+                </div>
+                <div class="mt-6 text-center">
+                    <button id="clearTeamsBtn"
+                            class="bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Effacer toutes les équipes
+                    </button>
+                </div>
+            </section>
+        `;
+        setupEquipesPageLogic();
     }
 
-    /**
-     * Rend la prévisualisation des groupes secondaires pour les éliminatoires.
-     */
-    function renderSecondaryGroupsPreview() {
-        const detailsContainer = document.getElementById('current-phase-content');
-        if (!detailsContainer || !window.currentSecondaryGroupsPreview.groups) {
-            if (detailsContainer) detailsContainer.innerHTML = `<p class="text-gray-600">Aucune prévisualisation de groupe éliminatoire disponible.</p>`;
-            return;
+    function setupEquipesPageLogic() {
+        const teamNameInput = document.getElementById('teamName');
+        const teamLevelInput = document.getElementById('teamLevel');
+        const addTeamBtn = document.getElementById('addTeamBtn');
+        const teamsListDiv = document.getElementById('teamsList');
+        const clearTeamsBtn = document.getElementById('clearTeamsBtn');
+        const messageElement = document.getElementById('message');
+        const excelFileInput = document.getElementById('excelFileInput');
+        const importTeamsBtn = document.getElementById('importTeamsBtn');
+        const importMessageElement = document.getElementById('importMessage');
+        const teamCountDisplay = document.getElementById('teamCountDisplay');
+
+
+        function renderTeams() {
+            teamsListDiv.innerHTML = '';
+            teamCountDisplay.textContent = allTeams.length.toString(); // Update team count
+
+            // Recalculate and update the level counts display when teams are rendered
+            let levelCounts = {};
+            allTeams.forEach(team => {
+                levelCounts[team.level] = (levelCounts[team.level] || 0) + 1;
+            });
+
+            let levelCountsHtml = '';
+            if (Object.keys(levelCounts).length > 0) {
+                levelCountsHtml += '<div class="mt-2 text-sm text-gray-600 space-y-1">';
+                Object.keys(levelCounts).sort((a, b) => parseInt(a) - parseInt(b)).forEach(level => {
+                    const count = levelCounts[level];
+                    levelCountsHtml += `<p>Niveau ${escapeHtml(level)}: <span class="font-bold">${count}</span> équipe${count > 1 ? 's' : ''}</p>`;
+                });
+                levelCountsHtml += '</div>';
+            } else {
+                levelCountsHtml = '<p class="mt-2 text-sm text-gray-600">Aucun niveau d\'équipe défini.</p>';
+            }
+            // Find the element for level counts and update it
+            const existingLevelCountsDiv = document.querySelector('section.p-6.bg-gray-50.rounded-lg.border.border-gray-200 div.mt-2.text-sm.text-gray-600.space-y-1');
+            if (existingLevelCountsDiv) {
+                 existingLevelCountsDiv.outerHTML = levelCountsHtml; // Replace the entire div to update content
+            } else {
+                // Fallback if the structure changes or if initially empty
+                const section = document.querySelector('section.p-6.bg-gray-50.rounded-lg.border.border-gray-200');
+                const h2 = section.querySelector('h2');
+                h2.insertAdjacentHTML('afterend', levelCountsHtml);
+            }
+
+
+            if (allTeams.length === 0) {
+                teamsListDiv.innerHTML = '<p class="text-gray-500 text-center">Aucune équipe n\'a été ajoutée pour le moment.</p>';
+                return;
+            }
+
+            allTeams.forEach(team => {
+                const teamDiv = document.createElement('div');
+                teamDiv.className = 'flex items-center justify-between p-3 bg-white border border-gray-200 rounded-md shadow-sm';
+                teamDiv.innerHTML = `
+                    <span class="text-gray-800 font-medium flex-grow">${escapeHtml(team.name)} (Niveau: ${escapeHtml(team.level.toString())})</span>
+                    <div class="flex space-x-2 ml-4">
+                        <button data-id="${team.id}" class="edit-team-btn bg-yellow-500 text-white px-3 py-1 rounded-md hover:bg-yellow-600 text-sm transition duration-150">Éditer</button>
+                        <button data-id="${team.id}" class="delete-team-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition duration-150">Supprimer</button>
+                    </div>
+                `;
+                teamsListDiv.appendChild(teamDiv);
+            });
+
+            document.querySelectorAll('.edit-team-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    const teamId = event.target.dataset.id;
+                    const teamToEdit = allTeams.find(t => t.id === teamId);
+                    if (teamToEdit) {
+                        const formDiv = document.createElement('div');
+                        formDiv.innerHTML = `
+                            <div class="mb-4">
+                                <label for="editTeamName" class="block text-sm font-medium text-gray-700 mb-1">Nom</label>
+                                <input type="text" id="editTeamName" class="w-full p-2 border border-gray-300 rounded-md" value="${escapeHtml(teamToEdit.name)}">
+                            </div>
+                            <div>
+                                <label for="editTeamLevel" class="block text-sm font-medium text-gray-700 mb-1">Niveau (1-10)</label>
+                                <input type="number" id="editTeamLevel" class="w-full p-2 border border-gray-300 rounded-md" min="1" max="10" value="${escapeHtml(teamToEdit.level.toString())}">
+                            </div>
+                        `;
+                        showModal('Éditer l\'équipe', formDiv, () => {
+                            const newName = document.getElementById('editTeamName').value.trim();
+                            const newLevel = parseInt(document.getElementById('editTeamLevel').value);
+
+                            if (!newName) {
+                                showToast("Le nom de l'équipe ne peut pas être vide.", "error");
+                                return;
+                            }
+                            // Check for duplicate name during edit, excluding the current team being edited
+                            if (teamExists(newName) && newName.toLowerCase() !== teamToEdit.name.toLowerCase()) {
+                                showToast(`Une équipe nommée "${escapeHtml(newName)}" existe déjà.`, "error");
+                                return;
+                            }
+                            if (isNaN(newLevel) || newLevel < 1 || newLevel > 10) {
+                                showToast("Le niveau doit être un nombre entre 1 et 10.", "error");
+                                return;
+                            }
+
+                            teamToEdit.name = newName;
+                            teamToEdit.level = newLevel;
+                            saveAllData();
+                            // Render is handled by onSnapshot
+                            // renderTeams();
+                            showToast(`Équipe "${escapeHtml(newName)}" mise à jour.`, "success");
+                        });
+                    }
+                });
+            });
+
+            document.querySelectorAll('.delete-team-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    const teamId = event.target.dataset.id;
+                    deleteTeam(teamId); // Call the unified deleteTeam function
+                });
+            });
         }
 
-        let groupsHtml = `
-            <div id="elimination-groups-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
-                ${Object.values(window.currentSecondaryGroupsPreview.groups).map(group => `
-                    <div class="bg-white p-6 rounded-lg shadow-md">
-                        <h3 class="text-xl font-bold text-gray-800 mb-4">Groupe ${escapeHtml(group.name)}</h3>
-                        <div class="space-y-2" data-group-id="${escapeHtml(group.id)}">
-                            ${group.teams.map(team => `
-                                <div class="flex items-center justify-between bg-gray-100 p-2 rounded-md team-item" data-team-id="${escapeHtml(team.id)}">
-                                    <span>${escapeHtml(team.name)}</span>
-                                    <button class="text-blue-500 hover:text-blue-700 move-team-btn" data-team-id="${escapeHtml(team.id)}" data-current-group-id="${escapeHtml(group.id)}">
-                                        Déplacer
-                                    </button>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-        `;
-        detailsContainer.innerHTML = groupsHtml;
+        addTeamBtn.addEventListener('click', () => {
+            const name = teamNameInput.value.trim();
+            const level = parseInt(teamLevelInput.value);
+            addTeam(name, level); // Call the unified addTeam function
+            teamNameInput.value = '';
+            teamLevelInput.value = '5';
+        });
 
-        // Attacher les écouteurs pour les boutons de déplacement
-        document.querySelectorAll('.move-team-btn').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const teamId = e.target.dataset.teamId;
-                const currentGroupId = e.target.dataset.currentGroupId;
-                window.showMoveTeamModal(teamId, currentGroupId);
+        clearTeamsBtn.addEventListener('click', () => {
+            const messageContent = document.createElement('p');
+            messageContent.textContent = "Êtes-vous sûr de vouloir supprimer TOUTES les équipes ? Cette action est irréversible.";
+            messageContent.className = 'text-gray-700';
+
+            showModal('Confirmer la suppression de toutes les équipes', messageContent, () => {
+                allTeams = [];
+                eliminatedTeams.clear(); // Effacer toutes les équipes éliminées
+                saveAllData();
+                // Render is handled by onSnapshot
+                // renderTeams();
+                showToast("Toutes les équipes ont été supprimées.", "success");
+            }, true);
+        });
+
+        importTeamsBtn.addEventListener('click', () => {
+            const file = excelFileInput.files[0];
+            if (!file) {
+                showToast("Veuillez sélectionner un fichier Excel.", "error");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                const json = XLSX.utils.sheet_to_json(worksheet);
+
+                let importedCount = 0;
+                let failedCount = 0;
+                let newTeams = [];
+                let skippedNames = [];
+
+                json.forEach(row => {
+                    const name = row['Nom']; // Assurez-vous que le nom de la colonne est 'Nom'
+                    const level = parseInt(row['Niveau']); // Assurez-vous que le nom de la colonne est 'Niveau'
+
+                    if (name && !isNaN(level) && level >= 1 && level <= 10) {
+                        if (teamExists(name)) {
+                            skippedNames.push(name);
+                            failedCount++;
+                        } else {
+                            newTeams.push({
+                                id: 'team_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+                                name: name,
+                                level: level
+                            });
+                            importedCount++;
+                        }
+                    } else {
+                        failedCount++;
+                        console.warn('Ligne ignorée en raison de données invalides:', row);
+                    }
+                });
+
+                if (importedCount > 0) {
+                    allTeams.push(...newTeams);
+                    saveAllData();
+                    // Render is handled by onSnapshot
+                    // renderTeams();
+                    let successMsg = `${importedCount} équipe(s) importée(s) avec succès.`;
+                    if (skippedNames.length > 0) {
+                        successMsg += ` ${failedCount} équipe(s) ignorée(s) (noms déjà existants ou données invalides) : ${skippedNames.map(escapeHtml).join(', ')}.`;
+                    }
+                    showToast(successMsg, "success");
+                } else if (json.length > 0) { // If there were rows, but none imported successfully
+                     let errorMsg = "Aucune équipe n'a pu être importée.";
+                     if (skippedNames.length > 0) {
+                         errorMsg += ` Les équipes suivantes existent déjà : ${skippedNames.map(escapeHtml).join(', ')}.`;
+                     }
+                     errorMsg += " Vérifiez le format des colonnes ('Nom', 'Niveau') et la validité des données (niveau entre 1 et 10).";
+                     showToast(errorMsg, "error");
+                } else { // File was empty or only headers
+                    showToast("Aucune nouvelle équipe n'a été trouvée dans le fichier ou le fichier est vide.", "info");
+                }
+                excelFileInput.value = ''; // Clear the input after processing
+            };
+            reader.onerror = (ex) => {
+                showToast("Erreur lors de la lecture du fichier : " + ex.message, "error");
+                console.error("Erreur de lecture de fichier:", ex);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        renderTeams();
+    }
+
+    function renderBrassagesPage() {
+        APP_CONTAINER.innerHTML = `
+            <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Génération des Poules de Brassage</h1>
+
+            <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">1. Choisir la Méthode de Génération des Poules</h2>
+                <div class="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-4">
+                    <div class="flex items-center">
+                        <input type="radio" id="basisInitialLevels" name="poolGenerationBasis" value="initialLevels" class="form-radio h-4 w-4 text-blue-600">
+                        <label for="basisInitialLevels" class="ml-2 text-gray-700">Base sur les niveaux initiaux des équipes</label>
+                    </div>
+                    <div class="flex items-center">
+                        <input type="radio" id="basisPreviousResults" name="poolGenerationBasis" value="previousResults" class="form-radio h-4 w-4 text-blue-600">
+                        <label for="basisPreviousResults" class="ml-2 text-gray-700">Base sur les résultats cumulés des brassages précédents</label>
+                    </div>
+                </div>
+                <p class="text-sm text-gray-600 mt-3" id="basisHelpText">
+                    Choisissez how les équipes seront réparties dans les poules.
+                </p>
+                <p id="basisMessage" class="mt-3 text-sm text-center"></p>
+            </section>
+
+            <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">2. Créer de Nouvelles Phases de Brassage</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                    <div>
+                        <label for="teamsPerPool" class="block text-sm font-medium text-gray-700 mb-1">Nombre d'équipes par poule</label>
+                        <input type="number" id="teamsPerPool" min="1" value="3" max="10"
+                               class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                    </div>
+                    <div>
+                        <label for="numberOfGlobalPhases" class="block text-sm font-medium text-gray-700 mb-1">Nombre de phases de brassage initial à créer</label>
+                        <input type="number" id="numberOfGlobalPhases" min="1" value="1"
+                               class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                    </div>
+                    <div class="md:col-span-2">
+                        <button id="createGlobalPhasesStructureBtn"
+                                class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                            Créer les phases de brassage
+                        </button>
+                    </div>
+                </div>
+                <p id="message" class="mt-3 text-sm text-center"></p>
+                <div id="nextBrassagePhaseContainer" class="mt-4 hidden text-center">
+                    <button id="createNextBrassagePhaseBtn"
+                            class="bg-purple-600 text-white py-2 px-4 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Créer la phase de brassage suivante
+                    </button>
+                    <p id="nextBrassagePhaseMessage" class="mt-3 text-sm text-center"></p>
+                </div>
+            </section>
+            
+            <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">3. Ajuster les Groupes de Brassage Supplémentaires (Optionnel)</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                    <div>
+                        <label for="numberOfSecondaryGroups" class="block text-sm font-medium text-gray-700 mb-1">Nombre de groupes de niveau à former (2 ou 3)</label>
+                        <select id="numberOfSecondaryGroups"
+                                class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                            <option value="2">2 Groupes (Principale, Consolante)</option>
+                            <option value="3">3 Groupes (Principale, Consolante, Super Consolante)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <button id="previewSecondaryGroupsBtn"
+                                class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                            Créer les groupes
+                        </button>
+                    </div>
+                </div>
+                <p id="secondaryPreviewMessage" class="mt-3 text-sm text-center"></p>
+                
+                <div id="secondaryGroupsPreviewDisplay" class="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <!-- Preview of groups will be rendered here -->
+                    <p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Créer les groupes".</p>
+                </div>
+                <div class="flex justify-center mt-6">
+                    <button id="refreshSecondaryGroupScoresBtn"
+                            class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 shadow-md transition ease-in-out duration-150 hidden">
+                        Actualiser les Scores des Groupes Secondaires
+                    </button>
+                </div>
+
+
+                <div class="mt-6 text-center">
+                    <button id="validateSecondaryGroupsBtn"
+                            class="bg-purple-600 text-white py-2 px-4 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150 hidden">
+                        Valider et Enregistrer la Répartition des Groupes
+                    </button>
+                    <button id="generateSecondaryBrassagesBtn"
+                            class="bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150 ml-2 hidden">
+                        Générer les Brassages des Groupes Secondaires
+                    </button>
+                </div>
+            </section>
+
+            <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">4. Passer Directement à la Phase Éliminatoire (Optionnel)</h2>
+                <p class="text-gray-600 mb-4">
+                    Si vous n'avez pas besoin de phases de brassage secondaires, vous pouvez valider les équipes
+                    pour la phase éliminatoire en vous basant sur leur classement général actuel.
+                    <br>
+                    **Attention :** Cette action écrasera toute configuration de groupes secondaires préalablement validée.
+                </p>
+                <div class="text-center">
+                    <button id="validateForDirectEliminationBtn"
+                            class="bg-purple-600 text-white py-2 px-6 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Valider toutes les équipes pour l'élimination directe
+                    </button>
+                </div>
+                <p id="directEliminationMessage" class="mt-3 text-sm text-center"></p>
+            </section>
+            
+            <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">Historique des Phases de Brassage</h2>
+                <div class="mt-4 flex items-center justify-end">
+                    <input type="checkbox" id="toggleRepeatedMatchesDisplay" class="form-checkbox h-4 w-4 text-blue-600 mr-2">
+                    <label for="toggleRepeatedMatchesDisplay" class="text-gray-700 text-sm">Afficher les rencontres répétées</label>
+                    <span id="repeatedMatchesCount" class="text-sm text-gray-500 ml-2"></span>
+                </div>
+                <div id="phaseHistoryDisplay" class="flex flex-col space-y-2 items-center">
+                    <p class="text-gray-500 text-center w-full">Aucune phase de brassage générée pour le moment.</p>
+                </div>
+                <div class="mt-4 text-center">
+                    <button id="clearAllPhasesBtn"
+                            class="bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Effacer toutes les Phases
+                    </button>
+                </div>
+            </section>
+
+            <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 id="currentPhaseTitle" class="text-2xl font-semibold text-gray-700 mb-4">Poules de la Phase Actuelle</h2>
+                <div id="poolsDisplay" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>
+                </div>
+            </section>
+        `;
+        setupBrassagesPageLogic();
+    }
+
+    function setupBrassagesPageLogic() {
+        const messageElement = document.getElementById('message');
+        const secondaryPreviewMessage = document.getElementById('secondaryPreviewMessage');
+        const poolsDisplay = document.getElementById('poolsDisplay');
+        const phaseHistoryDisplay = document.getElementById('phaseHistoryDisplay');
+        const numPoolsInput = document.getElementById('teamsPerPool');
+        const numberOfGlobalPhasesInput = document.getElementById('numberOfGlobalPhases');
+        const createGlobalPhasesStructureBtn = document.getElementById('createGlobalPhasesStructureBtn');
+        const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+        const previewSecondaryGroupsBtn = document.getElementById('previewSecondaryGroupsBtn');
+        const secondaryGroupsPreviewDisplay = document.getElementById('secondaryGroupsPreviewDisplay');
+        const validateSecondaryGroupsBtn = document.getElementById('validateSecondaryGroupsBtn');
+        const generateSecondaryBrassagesBtn = document.getElementById('generateSecondaryBrassagesBtn');
+        const clearAllPhasesBtn = document.getElementById('clearAllPhasesBtn');
+        const currentPhaseTitle = document.getElementById('currentPhaseTitle');
+        const toggleRepeatedMatchesDisplay = document.getElementById('toggleRepeatedMatchesDisplay');
+        const refreshSecondaryGroupScoresBtn = document.getElementById('refreshSecondaryGroupScoresBtn'); // NEW
+
+        // Elements for pool generation basis
+        const basisInitialLevelsRadio = document.getElementById('basisInitialLevels');
+        const basisPreviousResultsRadio = document.getElementById('basisPreviousResults');
+        const basisMessageElement = document.getElementById('basisMessage');
+        const basisHelpText = document.getElementById('basisHelpText');
+
+        // New elements for step-by-step phase creation
+        const nextBrassagePhaseContainer = document.getElementById('nextBrassagePhaseContainer');
+        const createNextBrassagePhaseBtn = document.getElementById('createNextBrassagePhaseBtn');
+        const nextBrassagePhaseMessage = document.getElementById('nextBrassagePhaseMessage');
+
+        // NOUVEAU: Éléments pour la validation directe
+        const validateForDirectEliminationBtn = document.getElementById('validateForDirectEliminationBtn');
+        const directEliminationMessage = document.getElementById('directEliminationMessage');
+
+
+        /**
+         * Generates options for a score select dropdown (0 to maxScore).
+         * @param {number} maxScore The maximum score to include.
+         * @param {number|null} selectedValue The current selected value, or null.
+         * @returns {string} HTML string for select options.
+         */
+        function generateScoreOptions(maxScore, selectedValue) {
+            let options = '<option value="">-</option>'; // Default empty option
+            for (let i = 0; i <= maxScore; i++) {
+                options += `<option value="${i}" ${selectedValue === i ? 'selected' : ''}>${i}</option>`;
+            }
+            return options;
+        }
+
+        // Modified renderPools to accept showRepeats parameter
+        function renderPools(pools, phaseName = "Poules Actuelles", phaseId = null, showRepeats = false) {
+            APP_CONTAINER.querySelector('#poolsDisplay').innerHTML = ''; // Cible le div #poolsDisplay à l'intérieur de APP_CONTAINER
+            APP_CONTAINER.querySelector('#currentPhaseTitle').textContent = 'Poules de ' + phaseName;
+            currentDisplayedPhaseId = phaseId;
+
+            if (pools.length === 0) {
+                APP_CONTAINER.querySelector('#poolsDisplay').innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Aucune poule générée pour cette phase.</p>';
+                return;
+            }
+
+            pools.forEach(pool => {
+                const poolCard = document.createElement('div');
+                poolCard.className = 'bg-white p-4 rounded-lg shadow-md border border-gray-200';
+
+                let teamsListHtml = '';
+                pool.teams.forEach(team => {
+                    // Display level for initial brassage, or points/diff for secondary/ranking-based
+                    const teamDetail = team.previewGroup ? `Groupe ${team.previewGroup}` :
+                                       (team.totalPoints !== undefined && team.totalDiffScore !== undefined ? `Pts: ${team.totalPoints}, Diff: ${team.totalDiffScore}` : `Niveau ${team.level}`);
+                    teamsListHtml += `<li>${escapeHtml(team.name)} (${teamDetail})</li>`;
+                });
+
+                let matchesHtml = '';
+                if (pool.matches && pool.matches.length > 0) {
+                    pool.matches.forEach((match, matchIndex) => {
+                        let team1Class = 'text-gray-700';
+                        let team2Class = 'text-gray-700';
+
+                        // Apply classes based on winnerId
+                        if (match.winnerId === match.team1Id) {
+                            team1Class = 'font-bold text-green-700';
+                            team2Class = 'text-red-700';
+                        } else if (match.winnerId === match.team2Id) {
+                            team2Class = 'font-bold text-green-700';
+                            team1Class = 'text-red-700';
+                        }
+                        
+                        // NEW: Ajouter l'indicateur de match répété et le rendre cliquable
+                        const isRepeat = isMatchRepeated(match.team1Id, match.team2Id, phaseId);
+                        const repeatIndicatorHtml = isRepeat ?
+                            `<button class="repeated-match-indicator-btn text-red-500 font-bold ml-2 text-sm focus:outline-none ${showRepeats ? '' : 'hidden'}"
+                                data-team1-id="${match.team1Id}"
+                                data-team2-id="${match.team2Id}"
+                                data-team1-name="${escapeHtml(match.team1Name)}"
+                                data-team2-name="${escapeHtml(match.team2Name)}">
+                                (Répété)
+                            </button>` : '';
+
+
+                        matchesHtml += `
+                            <div class="flex flex-col sm:flex-row items-center justify-between p-2 border-b border-gray-200 last:border-b-0 space-y-2 sm:space-y-0 sm:space-x-2">
+                                <span data-team-role="team1-name" class="${team1Class} w-full sm:w-auto text-center sm:text-left">${escapeHtml(match.team1Name)}</span>
+                                <div class="flex items-center space-x-1">
+                                    <select data-pool-id="${pool.id}" data-match-index="${matchIndex}" data-team="1" class="score-select w-20 p-1 border border-gray-300 rounded-md text-center text-sm">
+                                        ${generateScoreOptions(40, match.score1)}
+                                    </select>
+                                    <span class="text-gray-600">-</span>
+                                    <select data-pool-id="${pool.id}" data-match-index="${matchIndex}" data-team="2" class="score-select w-20 p-1 border border-gray-300 rounded-md text-center text-sm">
+                                        ${generateScoreOptions(40, match.score2)}
+                                    </select>
+                                </div>
+                                <span data-team-role="team2-name" class="${team2Class} w-full sm:w-auto text-center sm:text-right">${escapeHtml(match.team2Name)}</span>
+                                ${repeatIndicatorHtml}
+                            </div>
+                        `;
+                    });
+                } else {
+                    matchesHtml = '<p class="text-gray-500 text-sm mt-2">Aucune rencontre générée pour cette poule.</p>';
+                }
+
+                poolCard.innerHTML = '<h3 class="text-xl font-semibold text-gray-800 mb-3">' + escapeHtml(pool.name) + '</h3>' +
+                                     '<div class="mb-4">' +
+                                         '<h4 class="font-semibold text-gray-700 mb-2">Équipes:</h4>' +
+                                         '<ul class="list-disc list-inside space-y-1 text-gray-700">' +
+                                             teamsListHtml +
+                                         '</ul>' +
+                                     '</div>' +
+                                     '<div class="mt-4 border-t border-gray-200 pt-4">' +
+                                         '<h4 class="font-semibold text-gray-700 mb-2">Rencontres:</h4>' +
+                                         matchesHtml +
+                                     '</div>';
+                poolsDisplay.appendChild(poolCard);
+            });
+
+            poolsDisplay.querySelectorAll('.score-select').forEach(select => {
+                select.addEventListener('change', (event) => { // Changed from 'input' to 'change'
+                    const poolId = event.target.dataset.poolId;
+                    const matchIndex = parseInt(event.target.dataset.matchIndex);
+
+                    const matchDiv = event.target.closest('.flex.flex-col.sm\\:flex-row');
+                    const scoreSelects = matchDiv.querySelectorAll('.score-select');
+
+                    let score1 = parseInt(scoreSelects[0].value);
+                    let score2 = parseInt(scoreSelects[1].value);
+
+                    if (isNaN(score1)) score1 = null;
+                    if (isNaN(score2)) score2 = null;
+
+                    const phase = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId);
+                    if (phase) {
+                        const pool = phase.pools.find(p => p.id === poolId);
+                        if (pool) {
+                            const match = pool.matches[matchIndex];
+
+                            match.score1 = score1;
+                            match.score2 = score2;
+                            match.winnerId = null;
+
+                            if (score1 !== null && score2 !== null && score1 >= 0 && score2 >= 0) {
+                                if (score1 > score2) {
+                                    match.winnerId = match.team1Id;
+                                } else if (score2 > score1) {
+                                    match.winnerId = match.team2Id;
+                                } else {
+                                     // Handle tie - for now, no winner, message for user
+                                     showToast("Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", "error");
+                                }
+                            }
+                            saveAllData(); // Use saveAllData
+                            // renderPhaseHistory(); // To update next phase button visibility - handled by onSnapshot
+
+                            const team1Span = matchDiv.querySelector('span[data-team-role="team1-name"]');
+                            const team2Span = matchDiv.querySelector('span[data-team-role="team2-name"]');
+
+                            // Always reset classes first
+                            team1Span.classList.remove('font-bold', 'text-green-700', 'text-red-700');
+                            team2Span.classList.remove('font-bold', 'text-green-700', 'text-red-700');
+
+                            // Apply new classes based on winnerId
+                            if (match.winnerId === match.team1Id) {
+                                team1Span.classList.add('font-bold', 'text-green-700');
+                                team2Span.classList.add('text-red-700');
+                            } else if (match.winnerId === match.team2Id) {
+                                team2Span.classList.add('font-bold', 'text-green-700');
+                                team1Span.classList.add('text-red-700');
+                            }
+                            if (score1 !== null && score2 !== null && score1 >= 0 && score2 >= 0 && match.winnerId) {
+                                showToast("Score enregistré automatiquement pour " + escapeHtml(match.team1Name) + " vs " + escapeHtml(match.team2Name) + " !", "success");
+                            } else {
+                                showToast("Saisie en cours...", "info");
+                            }
+
+                        } else {
+                            console.error("ERROR: Pool not found for ID:", poolId);
+                        }
+                    } else {
+                        console.error("ERROR: Currently displayed phase not found:", currentDisplayedPhaseId);
+                    }
+                });
+            });
+
+            // Add event listeners for the new repeated match buttons
+            poolsDisplay.querySelectorAll('.repeated-match-indicator-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    const team1Id = event.target.dataset.team1Id;
+                    const team2Id = event.target.dataset.team2Id;
+                    const team1Name = event.target.dataset.team1Name;
+                    const team2Name = event.target.dataset.team2Name;
+                    showRepeatedMatchDetailsModal(team1Name, team2Name, team1Id, team2Id, phaseId); // Use passed phaseId
+                });
+            });
+        }
+
+        // Helper function to render pools with current display settings
+        function renderPoolsWithCurrentSettings(pools, phaseName, phaseId) {
+            const toggleRepeatedMatchesDisplay = document.getElementById('toggleRepeatedMatchesDisplay');
+            const showRepeats = toggleRepeatedMatchesDisplay ? toggleRepeatedMatchesDisplay.checked : false;
+            renderPools(pools, phaseName, phaseId, showRepeats);
+        }
+
+        function renderPhaseHistory() {
+            phaseHistoryDisplay.innerHTML = '';
+
+            const brassagePhasesForHistory = allBrassagePhases.filter(p => p.type !== PHASE_TYPE_ELIMINATION_SEEDING);
+            brassagePhasesForHistory.sort((a, b) => a.timestamp - b.timestamp);
+
+            if (brassagePhasesForHistory.length === 0) {
+                phaseHistoryDisplay.innerHTML = '<p class="text-gray-500 text-center w-full">Aucune phase de brassage générée pour le moment.</p>';
+            } else {
+                brassagePhasesForHistory.forEach(phase => {
+                    const phaseEntryWrapper = document.createElement('div');
+                    phaseEntryWrapper.className = 'phase-entry-wrapper flex flex-col w-full bg-gray-100 rounded-lg p-2 mb-2 shadow-sm';
+
+                    const buttonContainer = document.createElement('div');
+                    buttonContainer.className = 'flex items-center space-x-2 w-full';
+
+                    const phaseButton = document.createElement('button');
+                    phaseButton.textContent = phase.name;
+                    phaseButton.className = 'phase-name-button flex-grow bg-gray-200 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-300 transition duration-150 text-sm text-left';
+                    phaseButton.addEventListener('click', () => {
+                        renderPoolsWithCurrentSettings(phase.pools, phase.name, phase.id);
+                    });
+
+                    const generateOrDisplayButton = document.createElement('button');
+                    if (phase.generated) {
+                        generateOrDisplayButton.textContent = 'Afficher les poules';
+                        generateOrDisplayButton.className = 'generate-or-display-button bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition duration-150 text-sm ml-2';
+                        generateOrDisplayButton.addEventListener('click', () => {
+                            renderPoolsWithCurrentSettings(phase.pools, phase.name, phase.id);
+                        });
+                    } else {
+                        generateOrDisplayButton.textContent = 'Générer les poules';
+                        generateOrDisplayButton.className = 'generate-or-display-button bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition duration-150 text-sm ml-2';
+                        generateOrDisplayButton.addEventListener('click', () => {
+                            generatePoolsForPhase(phase.id); // Call the unified generation function
+                        });
+                    }
+
+                    const deleteButton = document.createElement('button');
+                    deleteButton.textContent = 'X';
+                    deleteButton.className = 'delete-phase-button bg-red-500 text-white w-6 h-6 flex items-center justify-center rounded-full text-xs hover:bg-red-600 transition duration-150';
+                    deleteButton.title = 'Supprimer cette phase';
+                    deleteButton.addEventListener('click', () => {
+                        const messageContent = document.createElement('p');
+                        messageContent.textContent = `Êtes-vous sûr de vouloir supprimer la phase "${escapeHtml(phase.name)}" ? Cette action est irréversible.`;
+                        messageContent.className = 'text-gray-700';
+
+                        showModal('Confirmer la suppression', messageContent, () => {
+                            deletePhaseById(phase.id);
+                        }, true);
+                    });
+
+                    buttonContainer.appendChild(phaseButton);
+                    buttonContainer.appendChild(generateOrDisplayButton);
+                    buttonContainer.appendChild(deleteButton);
+
+                    phaseEntryWrapper.appendChild(buttonContainer);
+
+                    phaseHistoryDisplay.appendChild(phaseEntryWrapper);
+                });
+            }
+            updateRepeatedMatchesCountDisplay(); // Update count display after history is rendered
+            updateNextPhaseButtonVisibility(); // Update visibility of the "Create next phase" button
+        }
+
+        /**
+         * Updates the visibility and message of the "Create next brassage phase" button.
+         */
+        function updateNextPhaseButtonVisibility() {
+            const basisInitialLevelsRadio = document.getElementById('basisInitialLevels');
+            const basisPreviousResultsRadio = document.getElementById('basisPreviousResults');
+            const nextBrassagePhaseContainer = document.getElementById('nextBrassagePhaseContainer');
+            const nextBrassagePhaseMessage = document.getElementById('nextBrassagePhaseMessage');
+
+            // Retrieve the basis from the DOM elements, not localStorage, as localStorage is no longer used for this setting
+            const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
+
+            const initialOrSecondaryPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE);
+            initialOrSecondaryPhases.sort((a, b) => a.timestamp - b.timestamp);
+
+            const lastBrassagePhase = initialOrSecondaryPhases[initialOrSecondaryPhases.length - 1];
+            const hasUngeneratedPhase = initialOrSecondaryPhases.some(p => !p.generated);
+
+            if (selectedBasis === 'previousResults' && lastBrassagePhase && isBrassagePhaseComplete(lastBrassagePhase) && !hasUngeneratedPhase) {
+                nextBrassagePhaseContainer.classList.remove('hidden');
+                nextBrassagePhaseMessage.textContent = "La phase de brassage précédente est complète. Vous pouvez créer la prochaine phase.";
+                nextBrassagePhaseMessage.classList.remove('text-red-500');
+                nextBrassagePhaseMessage.classList.add('text-green-500');
+            } else if (selectedBasis === 'previousResults' && lastBrassagePhase && !isBrassagePhaseComplete(lastBrassagePhase)) {
+                nextBrassagePhaseContainer.classList.remove('hidden');
+                nextBrassagePhaseMessage.textContent = `Veuillez compléter les scores de la phase "${escapeHtml(lastBrassagePhase ? lastBrassagePhase.name : 'Phase Inconnue')}" pour créer la phase suivante.`;
+                nextBrassagePhaseMessage.classList.remove('text-green-500');
+                nextBrassagePhaseMessage.classList.add('text-red-500');
+            } else if (selectedBasis === 'previousResults' && hasUngeneratedPhase) {
+                nextBrassagePhaseContainer.classList.remove('hidden');
+                nextBrassagePhaseMessage.textContent = `Une phase de brassage est en attente de génération. Veuillez générer ses poules en cliquant sur "Générer les poules".`;
+                nextBrassagePhaseMessage.classList.remove('text-green-500');
+                nextBrassagePhaseMessage.classList.add('text-red-500');
+            }
+            else {
+                nextBrassagePhaseContainer.classList.add('hidden');
+            }
+        }
+
+        function renderSecondaryGroupsPreview(groupNames) {
+            const secondaryGroupsPreviewDisplay = document.getElementById('secondaryGroupsPreviewDisplay');
+            const refreshSecondaryGroupScoresBtn = document.getElementById('refreshSecondaryGroupScoresBtn');
+            const validateSecondaryGroupsBtn = document.getElementById('validateSecondaryGroupsBtn');
+            const generateSecondaryBrassagesBtn = document.getElementById('generateSecondaryBrassagesBtn');
+            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+
+            secondaryGroupsPreviewDisplay.innerHTML = '';
+            refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide by default, show only if groups are rendered
+
+            if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
+                secondaryGroupsPreviewDisplay.innerHTML = '<p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Créer les groupes".</p>';
+                // Ensure buttons are hidden if there's no data
+                validateSecondaryGroupsBtn.classList.add('hidden');
+                generateSecondaryBrassagesBtn.classList.add('hidden');
+                refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
+                currentSecondaryGroupsPreview = {}; // Clear preview if invalid selection
+                saveAllData();
+                return;
+            }
+
+            // Ensure buttons are visible if there IS data
+            validateSecondaryGroupsBtn.classList.remove('hidden');
+            generateSecondaryBrassagesBtn.classList.remove('hidden');
+            refreshSecondaryGroupScoresBtn.classList.remove('hidden'); // Show refresh button
+
+
+            groupNames.forEach(groupName => {
+                const teamsInGroup = currentSecondaryGroupsPreview[groupName] || [];
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'bg-white p-4 rounded-lg shadow-md border border-gray-200 dropzone';
+                groupDiv.dataset.groupName = groupName;
+                groupDiv.innerHTML = `
+                    <h3 class="text-xl font-semibold text-gray-800 mb-3">${escapeHtml(groupName)} (${teamsInGroup.length} équipes)</h3>
+                    <ul class="space-y-2" id="group-${groupName.replace(/\s/g, '-')}-list"></ul>
+                `;
+                const teamList = groupDiv.querySelector('ul');
+
+                teamsInGroup.forEach(team => {
+                    const listItem = document.createElement('li');
+                    const isEliminated = eliminatedTeams.has(team.id);
+
+                    // Changed to a more "button-like" appearance and added elimination styling
+                    listItem.className = `draggable-team block w-full text-left py-2 px-3 rounded-md font-medium hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition duration-150 shadow-sm cursor-pointer
+                        ${isEliminated ? 'bg-red-50 text-red-800' : 'bg-blue-100 text-blue-800'}`;
+                    listItem.dataset.teamId = team.id;
+                    listItem.dataset.currentGroup = groupName;
+                    listItem.dataset.teamName = team.name;
+                    listItem.dataset.totalPoints = team.totalPoints;
+                    listItem.dataset.totalDiffScore = team.totalDiffScore;
+
+                    // Display updated scores and elimination status
+                    listItem.innerHTML = `
+                        <span class="${isEliminated ? 'line-through' : ''}">${escapeHtml(team.name)} (Pts: ${team.totalPoints}, Diff: ${team.totalDiffScore})</span>
+                        ${isEliminated ? '<span class="ml-2 text-red-500 text-sm">(Éliminée)</span>' : ''}
+                    `;
+
+                    // MODIFIÉ : Appel d'une nouvelle fonction pour gérer les options de l'équipe
+                    listItem.addEventListener('click', (event) => {
+                        showTeamOptionsModal(team.id, team.name, team.totalPoints, team.totalDiffScore, groupName, groupNames);
+                    });
+
+                    teamList.appendChild(listItem);
+                });
+                secondaryGroupsPreviewDisplay.appendChild(groupDiv);
+            });
+        }
+
+        /**
+         * Updates the scores displayed in the secondary groups preview without re-shuffling teams.
+         * This is useful if brassage phase scores have been updated after the preview was generated.
+         */
+        function updateSecondaryGroupsPreviewDisplayOnly() {
+            const numberOfSecondaryGroupsInput = document.getElementById('numberOfSecondaryGroups');
+            if (Object.keys(currentSecondaryGroupsPreview).length === 0) {
+                showToast("Aucune prévisualisation de groupe secondaire à actualiser.", "info");
+                return;
+            }
+
+            const latestGlobalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+            const rankingsMap = new Map(latestGlobalRankings.map(r => [r.teamObject.id, r]));
+
+            let displayUpdated = false;
+
+            for (const groupName in currentSecondaryGroupsPreview) {
+                currentSecondaryGroupsPreview[groupName].forEach(teamInPreview => {
+                    const latestTeamRank = rankingsMap.get(teamInPreview.id);
+                    if (latestTeamRank) {
+                        // Update the stored totalPoints and totalDiffScore in the preview data
+                        if (teamInPreview.totalPoints !== latestTeamRank.totalPoints ||
+                            teamInPreview.totalDiffScore !== latestTeamRank.totalDiffScore) {
+                            teamInPreview.totalPoints = latestTeamRank.totalPoints;
+                            teamInPreview.totalDiffScore = latestTeamRank.totalDiffScore;
+                            displayUpdated = true; // Indicate that content changed
+                        }
+                    }
+                });
+                // Re-sort the teams within each preview group to maintain rank order
+                currentSecondaryGroupsPreview[groupName].sort((a, b) => b.totalPoints - a.totalPoints || b.totalDiffScore - a.totalDiffScore);
+            }
+
+            // Re-render the secondary groups preview to show updated scores
+            const numGroupsValue = parseInt(numberOfSecondaryGroupsInput.value);
+            const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+            const selectedGroupNames = groupNamesMap[numGroupsValue];
+            
+            renderSecondaryGroupsPreview(selectedGroupNames); // This will redraw the display with updated scores
+            saveAllData(); // Save the updated scores in the preview data
+
+            if (displayUpdated) {
+                showToast("Scores des groupes secondaires actualisés avec les dernières données de classement.", "success");
+            } else {
+                showToast("Les scores des groupes secondaires sont déjà à jour.", "info");
+            }
+        }
+
+
+        function deletePhaseById(phaseIdToDelete) {
+            const initialLength = allBrassagePhases.length;
+            allBrassagePhases = allBrassagePhases.filter(phase => phase.id !== phaseIdToDelete);
+
+            if (allBrassagePhases.length < initialLength) {
+                saveAllData();
+                // Render is handled by onSnapshot
+                // renderPhaseHistory();
+
+                if (currentDisplayedPhaseId === phaseIdToDelete) {
+                    poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
+                    currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
+                    currentDisplayedPhaseId = null;
+                }
+                showToast("La phase a été supprimée avec succès !", "success");
+
+            } else {
+                showToast("Erreur: Phase non trouvée pour la suppression.", "error");
+            }
+        }
+
+        // Wrapper pour `_performSecondaryGroupsPreview` avec avertissement
+        function previewSecondaryGroupsWithWarning() {
+            if (Object.keys(currentSecondaryGroupsPreview).length > 0) {
+                const messageContent = document.createElement('p');
+                messageContent.innerHTML = `Des groupes secondaires ont déjà été créés. En continuant, vous perdrez la composition actuelle des groupes et ils seront recréés. Êtes-vous sûr de vouloir continuer ?`;
+                messageContent.className = 'text-gray-700';
+
+                showModal('Confirmer la re-création des groupes secondaires', messageContent, () => {
+                    _performSecondaryGroupsPreview(); // Call the actual generation logic
+                }, true); // Use red style for confirmation button
+            } else {
+                _performSecondaryGroupsPreview(); // No warning needed if no preview exists
+            }
+        }
+
+        // --- Initialisation et Événements pour la page Brassages ---
+
+        // Initialize pool generation basis radio buttons
+        // No longer load from localStorage, rely on default checked or user interaction
+        if (basisInitialLevelsRadio) basisInitialLevelsRadio.checked = true; // Default to initial levels
+        updatePoolGenerationBasisUI(); // Call to set initial state based on default or loaded value
+
+
+        // Event listeners for basis selection
+        basisInitialLevelsRadio.addEventListener('change', () => {
+            // localStorage.setItem(POOL_GENERATION_BASIS_KEY, 'initialLevels'); // No longer use localStorage
+            updatePoolGenerationBasisUI();
+        });
+
+        basisPreviousResultsRadio.addEventListener('change', () => {
+            // localStorage.setItem(POOL_GENERATION_BASIS_KEY, 'previousResults'); // No longer use localStorage
+            updatePoolGenerationBasisUI();
+        });
+        
+        function updatePoolGenerationBasisUI() {
+        // Read directly from the DOM elements
+        const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
+        console.log(`DEBUG: updatePoolGenerationBasisUI - Selected basis from DOM: "${selectedBasis}"`);
+
+        const initialLevelsRadio = document.getElementById('basisInitialLevels');
+        const previousResultsRadio = document.getElementById('basisPreviousResults');
+        const numberOfGlobalPhasesInput = document.getElementById('numberOfGlobalPhases');
+        const basisHelpText = document.getElementById('basisHelpText');
+
+        if (initialLevelsRadio && previousResultsRadio) {
+            if (selectedBasis === 'initialLevels') {
+                initialLevelsRadio.checked = true;
+                previousResultsRadio.checked = false;
+                numberOfGlobalPhasesInput.readOnly = false; // Permettre plusieurs phases pour les niveaux initiaux
+                basisHelpText.textContent = "Crée des phases en utilisant les niveaux initiaux des équipes. Vous pouvez créer plusieurs phases de brassage initiales si nécessaire.";
+            } else { // selectedBasis === 'previousResults'
+                initialLevelsRadio.checked = false;
+                previousResultsRadio.checked = true;
+                numberOfGlobalPhasesInput.value = 1; // Forcer à 1 pour les résultats précédents
+                numberOfGlobalPhasesInput.readOnly = true; // Une seule phase à la fois pour les résultats précédents
+                basisHelpText.textContent = "Crée une phase en utilisant les résultats cumulés des brassages précédents. Une seule phase peut être créée à la fois avec cette méthode.";
+            }
+        } else {
+             console.warn("DEBUG: Radio buttons for pool generation basis not found in DOM.");
+        }
+        // Assurez-vous que l'historique des phases et la visibilité des boutons sont mis à jour
+        renderPhaseHistory(); // Cette fonction appelle updateNextPhaseButtonVisibility en interne
+    }
+
+
+        createGlobalPhasesStructureBtn.addEventListener('click', () => {
+            const numPhases = parseInt(numberOfGlobalPhasesInput.value);
+            // Read directly from the DOM elements
+            const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
+
+            if (allTeams.length === 0) {
+                showToast("Aucune équipe n'a été ajoutée. Veuillez gérer les équipes d'abord.", "error");
+                return;
+            }
+
+            if (isNaN(numPhases) || numPhases < 1) {
+                showToast("Veuillez entrer un nombre valide de phases globales à créer (au moins 1).", "error");
+                return;
+            }
+
+            // Get existing actual brassage phases (initial and secondary)
+            const existingBrassagePhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE);
+            const hasUngeneratedPhase = existingBrassagePhases.some(p => !p.generated);
+            const lastBrassagePhase = existingBrassagePhases[existingBrassagePhases.length - 1];
+
+            if (selectedBasis === 'previousResults') {
+                if (existingBrassagePhases.length > 0 && !isBrassagePhaseComplete(lastBrassagePhase)) {
+                     showToast(`La phase "${escapeHtml(lastBrassagePhase.name)}" n'est pas terminée. Veuillez compléter ses scores ou la supprimer pour créer une nouvelle phase.`, "error");
+                     return;
+                }
+                if (hasUngeneratedPhase) {
+                    showToast("Une phase de brassage est en attente de génération. Veuillez générer ses poules en cliquant sur 'Générer les poules' ou la supprimer.", "error");
+                    return;
+                }
+                if (numPhases > 1) { // This case should be prevented by readOnly, but as a safeguard
+                    showToast("Lorsque la méthode de génération est 'Base sur les résultats cumulés des brassages précédents', vous ne pouvez créer qu'une seule phase à la fois.", "error");
+                    numberOfGlobalPhasesInput.value = 1; // Force back to 1
+                    return;
+                }
+            }
+
+
+            let newGlobalPhases = [];
+            const nextPhaseNumber = existingBrassagePhases.length + 1; // Calculate next phase number
+
+            // Filter out existing initial and secondary brassage phases when creating NEW global phases
+            // We want to keep only the ELIMINATION_SEEDING phase, as it's a validated state for future elimination.
+            allBrassagePhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING);
+
+            for (let i = 0; i < numPhases; i++) {
+                newGlobalPhases.push({
+                    id: `${PHASE_TYPE_INITIAL}_${Date.now()}_${i}`,
+                    type: PHASE_TYPE_INITIAL,
+                    name: `Phase Globale ${nextPhaseNumber + i}`, // Use calculated phase number
+                    pools: [],
+                    generated: false, // Newly created phases are not yet generated
+                    timestamp: Date.now() + i // Ensure unique timestamp for ordering
+                });
+            }
+            
+            allBrassagePhases.push(...newGlobalPhases);
+            saveAllData();
+            // Le rendu est géré par onSnapshot après l'appel à saveAllData
+            // renderPhaseHistory();
+            // poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>';
+            // currentPhaseTitle.textContent = 'Poules de la Phase Actuelle';
+            // currentDisplayedPhaseId = null;
+
+            if (selectedBasis === 'previousResults') {
+                 showToast(`Une seule phase ('Phase Globale ${nextPhaseNumber}') a été créée. Veuillez générer ses poules, puis compléter ses scores pour débloquer la création de la phase suivante.`, "info");
+            } else {
+                 showToast(`${numPhases} phases globales créées. Générez les poules pour chaque phase.`, "success");
+            }
+        });
+
+        // New event listener for creating the next phase when basis is previousResults
+        createNextBrassagePhaseBtn.addEventListener('click', async () => {
+            // Read directly from the DOM elements
+            const basisInitialLevelsRadio = document.getElementById('basisInitialLevels');
+            const basisPreviousResultsRadio = document.getElementById('basisPreviousResults');
+            const selectedBasis = basisInitialLevelsRadio.checked ? 'initialLevels' : (basisPreviousResultsRadio.checked ? 'previousResults' : null);
+            if (selectedBasis !== 'previousResults') {
+                showToast("Cette option n'est disponible que lorsque la génération est basée sur les résultats précédents.", "error");
+                return;
+            }
+
+            const initialOrSecondaryPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE);
+            initialOrSecondaryPhases.sort((a,b) => a.timestamp - b.timestamp);
+
+            const lastBrassagePhase = initialOrSecondaryPhases[initialOrSecondaryPhases.length - 1];
+            const hasUngeneratedPhase = initialOrSecondaryPhases.some(p => !p.generated);
+
+            if (!lastBrassagePhase || !isBrassagePhaseComplete(lastBrassagePhase)) {
+                showToast(`Veuillez compléter tous les scores de la phase "${escapeHtml(lastBrassagePhase ? lastBrassagePhase.name : 'précédente')}" avant de créer la phase suivante.`, "error");
+                return;
+            }
+            if (hasUngeneratedPhase) {
+                showToast("Une phase de brassage est en attente de génération. Veuillez générer ses poules en cliquant sur 'Générer les poules' ou la supprimer.", "error");
+                return;
+            }
+
+            const nextPhaseNumber = initialOrSecondaryPhases.length + 1;
+            const newPhase = {
+                id: `${PHASE_TYPE_INITIAL}_${Date.now()}_${nextPhaseNumber}`,
+                type: PHASE_TYPE_INITIAL,
+                name: `Phase Globale ${nextPhaseNumber}`,
+                pools: [],
+                generated: false,
+                timestamp: Date.now() // Ensure unique timestamp for ordering
+            };
+
+            allBrassagePhases.push(newPhase);
+            await saveAllData();
+            // Render is handled by onSnapshot
+            // renderPhaseHistory();
+            showToast(`Phase Globale ${nextPhaseNumber} créée avec succès !`, "success");
+        });
+
+        previewSecondaryGroupsBtn.addEventListener('click', previewSecondaryGroupsWithWarning);
+        numberOfSecondaryGroupsInput.addEventListener('change', () => {
+            // If the user changes the number of groups, clear the current preview
+            // because the structure might be different.
+            currentSecondaryGroupsPreview = {};
+            secondaryGroupsPreviewDisplay.innerHTML = '<p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Créer les groupes".</p>';
+            validateSecondaryGroupsBtn.classList.add('hidden');
+            generateSecondaryBrassagesBtn.classList.add('hidden');
+            refreshSecondaryGroupScoresBtn.classList.add('hidden'); // Hide refresh button
+            saveAllData();
+        });
+
+        validateSecondaryGroupsBtn.addEventListener('click', validateSecondaryGroupsForElimination);
+
+        generateSecondaryBrassagesBtn.addEventListener('click', () => {
+            const messageContent = document.createElement('p');
+            messageContent.textContent = "Êtes-vous sûr de vouloir générer les phases de brassage pour les groupes Principale, Consolante et Super Consolante ? Cette action ajoutera de nouvelles phases à l'historique.";
+            messageContent.className = 'text-gray-700';
+
+            showModal('Confirmer la génération des brassages de groupes secondaires', messageContent, () => {
+                generateSecondaryBrassagePhases();
             });
         });
+
+        // NOUVEAU: Écouteur pour le bouton de validation directe
+        validateForDirectEliminationBtn.addEventListener('click', validateForDirectElimination);
+
+        clearAllPhasesBtn.addEventListener('click', clearAllPhases);
+
+        // Event listener for toggling repeated matches display
+        toggleRepeatedMatchesDisplay.addEventListener('change', () => {
+            if (currentDisplayedPhaseId) {
+                const currentPhase = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId);
+                if (currentPhase) {
+                    renderPoolsWithCurrentSettings(currentPhase.pools, currentPhase.name, currentPhase.id);
+                }
+            }
+        });
+
+        // NEW: Event listener for refreshing secondary group scores
+        refreshSecondaryGroupScoresBtn.addEventListener('click', updateSecondaryGroupsPreviewDisplayOnly);
+
+        // Load and display the previously selected phase if it exists
+        if (currentDisplayedPhaseId) {
+            const initialPhase = allBrassagePhases.find(p => p.id === currentDisplayedPhaseId);
+            if (initialPhase) {
+                renderPoolsWithCurrentSettings(initialPhase.pools, initialPhase.name, initialPhase.id);
+            }
+        }
+
+        // NEW: On page load, if a secondary group preview exists, render it
+        if (Object.keys(currentSecondaryGroupsPreview).length > 0) {
+            // The number of groups should be derived from the actual preview, not localStorage
+            const numGroupsInPreview = Object.keys(currentSecondaryGroupsPreview).length;
+            const groupNamesMap = { 2: ["Principale", "Consolante"], 3: ["Principale", "Consolante", "Super Consolante"] };
+            const selectedGroupNames = groupNamesMap[numGroupsInPreview];
+            
+            // Ensure the dropdown reflects the loaded state
+            if (numberOfSecondaryGroupsInput.value !== numGroupsInPreview.toString()) {
+                numberOfSecondaryGroupsInput.value = numGroupsInPreview;
+            }
+
+            renderSecondaryGroupsPreview(selectedGroupNames);
+        }
     }
 
-    /**
-     * Rend la page de sélection des groupes pour les éliminatoires.
-     */
+    // NOUVEAU: Fonction pour la page de sélection des équipes éliminées
     function renderEliminationSelectionPage() {
-        if (!APP_CONTAINER || !window.currentTournamentData) {
-            console.error("APP_CONTAINER ou currentTournamentData non trouvé.");
-            return;
-        }
+        APP_CONTAINER.innerHTML = `
+            <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Sélection des Équipes Éliminées</h1>
 
-        if (window.allTeams.length === 0) {
-            APP_CONTAINER.innerHTML = `<p class="text-red-500">Aucune équipe enregistrée. Veuillez d'abord ajouter des équipes.</p>`;
-            return;
-        }
-
-        const lastBrassagePhase = window.allBrassagePhases.filter(p => p.type === window.PHASE_TYPE_INITIAL || p.type === window.PHASE_TYPE_SECONDARY_BRASSAGE).pop();
-        if (!lastBrassagePhase || !lastBrassagePhase.generated || !lastBrassagePhase.rankings) {
-            APP_CONTAINER.innerHTML = `<p class="text-red-500">Veuillez générer et compléter au moins une phase de brassage avant de préparer les éliminatoires.</p>`;
-            return;
-        }
-
-        const teamsRanked = lastBrassagePhase.rankings.map(ranking => {
-            return {
-                id: ranking.teamId,
-                name: ranking.teamName,
-                score: ranking.points // Utiliser les points comme score de classement initial
-            };
-        });
-
-        // Grouper les équipes par rang pour la sélection
-        const groupedTeams = {};
-        teamsRanked.forEach(team => {
-            const rank = team.score; // Ou tout autre critère de regroupement initial
-            if (!groupedTeams[rank]) {
-                groupedTeams[rank] = [];
-            }
-            groupedTeams[rank].push(team);
-        });
-
-        // Trier les groupes par rang décroissant (meilleurs rangs en premier)
-        const sortedRanks = Object.keys(groupedTeams).sort((a, b) => b - a);
-
-        // Assurez-vous que currentSecondaryGroupsPreview est initialisé
-        if (!window.currentSecondaryGroupsPreview.groups) {
-            window.currentSecondaryGroupsPreview = {
-                id: `elim_seeding_${Date.now()}`, // ID unique pour cette prévisualisation
-                groups: {}, // { groupId: { name: 'A', teams: [{id, name}], seeding: 'top', originalRank: 1 } }
-                generatedAt: new Date().toISOString()
-            };
-        }
-
-        let eliminationSelectionHtml = `
-            <h2 class="text-2xl font-bold text-blue-600 mb-6 text-center">Préparation des Groupes Éliminatoires</h2>
-            <div class="bg-white p-6 rounded-lg shadow-md mb-6">
-                <p class="text-gray-700 mb-4">
-                    Classement de la dernière phase de brassage (points):
-                </p>
-                <div class="flex flex-wrap gap-2 mb-4">
-                    ${sortedRanks.map(rank => `
-                        <span class="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium">
-                            ${escapeHtml(String(rank))} points: ${groupedTeams[rank].map(team => escapeHtml(team.name)).join(', ')}
-                        </span>
-                    `).join('')}
+            <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <p class="text-gray-700 mb-4">Cochez les équipes qui seront exclues des phases éliminatoires. Elles n'apparaîtront pas dans les arbres de tournoi.</p>
+                <div id="eliminationTeamsList" class="space-y-3">
+                    <!-- Checkboxes for teams will be injected here -->
                 </div>
-
-                <div class="flex flex-col md:flex-row gap-4 mb-4">
-                    <div class="flex-1">
-                        <label for="num-groups-elimination" class="block text-gray-700 text-sm font-bold mb-2">Nombre de groupes d'élimination:</label>
-                        <input type="number" id="num-groups-elimination" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" min="2" value="2">
-                    </div>
-                    <div class="flex-1">
-                        <label for="teams-per-group-elimination" class="block text-gray-700 text-sm font-bold mb-2">Équipes par groupe:</label>
-                        <input type="number" id="teams-per-group-elimination" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" min="2" value="2">
-                    </div>
-                </div>
-                <div class="flex justify-center gap-4">
-                    <button id="auto-distribute-teams" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                        Distribution automatique
+                <div class="mt-6 text-center">
+                    <button id="saveEliminationSelectionBtn"
+                            class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Sauvegarder la Sélection
                     </button>
-                    <button id="clear-elimination-groups" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition duration-150">
-                        Effacer les groupes
-                    </button>
+                    <p id="eliminationSelectionMessage" class="mt-3 text-sm text-center"></p>
                 </div>
-            </div>
-
-            <div id="elimination-groups-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full">
-                ${Object.values(window.currentSecondaryGroupsPreview.groups).map(group => `
-                    <div class="bg-white p-6 rounded-lg shadow-md">
-                        <h3 class="text-xl font-bold text-gray-800 mb-4">Groupe ${escapeHtml(group.name)}</h3>
-                        <div class="space-y-2" data-group-id="${escapeHtml(group.id)}">
-                            ${group.teams.map(team => `
-                                <div class="flex items-center justify-between bg-gray-100 p-2 rounded-md team-item" data-team-id="${escapeHtml(team.id)}">
-                                    <span>${escapeHtml(team.name)}</span>
-                                    <button class="text-blue-500 hover:text-blue-700 move-team-btn" data-team-id="${escapeHtml(team.id)}" data-current-group-id="${escapeHtml(group.id)}">
-                                        Déplacer
-                                    </button>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-
-            <div class="mt-8 text-center">
-                <button id="confirm-elimination-groups" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition duration-150 text-lg">
-                    Confirmer les Groupes pour Éliminatoires
-                </button>
-            </div>
+            </section>
         `;
-        APP_CONTAINER.innerHTML = eliminationSelectionHtml;
         setupEliminationSelectionPageLogic();
     }
 
-    /**
-     * Rend la page de gestion des éliminatoires.
-     */
-    function renderEliminatoiresPage() {
-        if (!APP_CONTAINER || !window.currentTournamentData) {
-            console.error("APP_CONTAINER ou currentTournamentData non trouvé.");
-            return;
+    // NOUVEAU: Logique de la page de sélection des équipes éliminées
+    function setupEliminationSelectionPageLogic() {
+        const eliminationTeamsList = document.getElementById('eliminationTeamsList');
+        const saveEliminationSelectionBtn = document.getElementById('saveEliminationSelectionBtn');
+        const eliminationSelectionMessage = document.getElementById('eliminationSelectionMessage');
+
+        function renderTeamsForEliminationSelection() {
+            eliminationTeamsList.innerHTML = '';
+
+            if (allTeams.length === 0) {
+                eliminationTeamsList.innerHTML = '<p class="text-gray-500 text-center">Aucune équipe enregistrée.</p>';
+                return;
+            }
+
+            // 1. Calculer le classement global
+            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+
+            // 2. Créer une map pour un accès rapide aux scores par ID d'équipe
+            const teamScoresMap = new Map();
+            globalRankings.forEach(rankEntry => {
+                teamScoresMap.set(rankEntry.teamObject.id, {
+                    points: rankEntry.totalPoints,
+                    diffScore: rankEntry.totalDiffScore
+                });
+            });
+
+            // 3. Trier les équipes pour l'affichage
+            const sortedTeamsForDisplay = [...allTeams].sort((a, b) => {
+                const scoreA = teamScoresMap.get(a.id) || { points: 0, diffScore: 0 };
+                const scoreB = teamScoresMap.get(b.id) || { points: 0, diffScore: 0 };
+
+                // Tri par points décroissant
+                if (scoreB.points !== scoreA.points) {
+                    return scoreB.points - scoreA.points;
+                }
+                // Tri par différence de score décroissante
+                if (scoreB.diffScore !== scoreA.diffScore) {
+                    return scoreB.diffScore - scoreA.diffScore;
+                }
+                // Tri alphabétique par nom en dernier recours
+                return a.name.localeCompare(b.name);
+            });
+
+
+            sortedTeamsForDisplay.forEach(team => {
+                const teamDiv = document.createElement('div');
+                const isChecked = eliminatedTeams.has(team.id);
+
+                // Récupérer les scores de la map
+                const scores = teamScoresMap.get(team.id) || { points: 0, diffScore: 0 };
+
+                teamDiv.className = `flex items-center justify-between p-3 bg-white border border-gray-200 rounded-md shadow-sm cursor-pointer ${isChecked ? 'bg-red-50' : ''}`;
+                teamDiv.innerHTML = `
+                    <label class="flex items-center flex-grow cursor-pointer">
+                        <input type="checkbox" data-team-id="${team.id}" class="form-checkbox h-5 w-5 text-red-600 mr-3" ${isChecked ? 'checked' : ''}>
+                        <span class="text-lg font-medium text-gray-800 ${isChecked ? 'line-through text-red-600' : ''}">
+                            ${escapeHtml(team.name)} (Pts: ${scores.points}, Diff: ${scores.diffScore})
+                        </span>
+                    </label>
+                `;
+                eliminationTeamsList.appendChild(teamDiv);
+
+                // Add event listener to update visual state immediately
+                const checkbox = teamDiv.querySelector('input[type="checkbox"]');
+                const teamNameSpan = teamDiv.querySelector('span');
+                checkbox.addEventListener('change', () => {
+                    if (checkbox.checked) {
+                        teamDiv.classList.add('bg-red-50');
+                        teamNameSpan.classList.add('line-through', 'text-red-600');
+                    } else {
+                        teamDiv.classList.remove('bg-red-50');
+                        teamNameSpan.classList.remove('line-through', 'text-red-600');
+                    }
+                });
+            });
         }
 
-        const eliminationPhasesKeys = Object.keys(window.eliminationPhases).sort(); // Sort for consistent order
-        if (eliminationPhasesKeys.length === 0) {
-            APP_CONTAINER.innerHTML = `
-                <h2 class="text-2xl font-bold text-blue-600 mb-6 text-center">Éliminatoires</h2>
-                <p class="text-gray-600 text-center">Aucune phase d'élimination générée pour l'instant.</p>
-                <div class="text-center mt-4">
-                    <button onclick="window.location.hash='#brassages'" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                        Aller aux brassages pour générer les groupes éliminatoires
+        saveEliminationSelectionBtn.addEventListener('click', () => {
+            eliminatedTeams.clear(); // Clear existing selections
+            document.querySelectorAll('#eliminationTeamsList input[type="checkbox"]:checked').forEach(checkbox => {
+                eliminatedTeams.add(checkbox.dataset.teamId);
+            });
+            saveAllData();
+            showToast("Sélection des équipes éliminées sauvegardée !", "success");
+            window.location.hash = '#eliminatoires';
+        });
+
+        renderTeamsForEliminationSelection();
+    }
+
+
+    function renderEliminatoiresPage() {
+        APP_CONTAINER.innerHTML = `
+            <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Phase Éliminatoire</h1>
+
+            <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">Génération des phases éliminatoires</h2>
+                <p class="text-gray-600 mb-4">
+                    Les phases éliminatoires seront générées pour les groupes "Principale", "Consolante" et "Super Consolante"
+                    (si ces groupes existent et contiennent au moins 2 équipes) validés sur la page Brassages. Les matchs seront appariés 1er contre dernier, 2ème contre avant-dernier, etc.
+                </p>
+                <div class="flex flex-col sm:flex-row justify-center gap-4 mt-6">
+                    <button id="goToEliminationSelectionBtn"
+                            class="bg-yellow-600 text-white py-2 px-4 rounded-md hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Sélectionner les équipes à éliminer
+                    </button>
+                    <button id="generateEliminationPhasesBtn"
+                            class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Générer les Phases Éliminatoires
+                    </button>
+                    <button id="resetAllEliminationPhasesBtn"
+                            class="bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                        Réinitialiser toutes les Phases
                     </button>
                 </div>
-            `;
-            return;
-        }
+                <p id="eliminationMessage" class="mt-3 text-sm text-center"></p>
+            </section>
 
-        let eliminationHtml = `
-            <h2 class="text-2xl font-bold text-blue-600 mb-6 text-center">Gestion des Éliminatoires</h2>
-            <div class="flex flex-col gap-8">
+            <div id="eliminationBracketsDisplay" class="space-y-8 mt-8">
+                <p class="text-gray-500 text-center">Cliquez sur "Générer les Phases Éliminatoires" pour afficher les tournois.</p>
+            </div>
         `;
-
-        eliminationPhasesKeys.forEach(roundKey => {
-            const roundData = window.eliminationPhases[roundKey];
-            const roundName = roundData.name;
-            const matches = roundData.matches;
-            const teamsInRound = [...new Set(matches.flatMap(m => [m.team1Id, m.team2Id]))];
-
-            eliminationHtml += `
-                <div class="bg-white p-6 rounded-lg shadow-md">
-                    <h3 class="text-xl font-bold text-gray-800 mb-4">${escapeHtml(roundName)}</h3>
-                    <p class="text-gray-700 mb-4">Équipes dans ce tour : ${teamsInRound.length}</p>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            `;
-
-            if (matches.length === 0) {
-                eliminationHtml += `<p class="text-gray-600 md:col-span-2">Aucun match dans ce tour pour l'instant.</p>`;
-            } else {
-                matches.forEach(match => {
-                    const team1 = window.allTeams.find(t => t.id === match.team1Id);
-                    const team2 = window.allTeams.find(t => t.id === match.team2Id);
-
-                    const team1Name = team1 ? escapeHtml(team1.name) : 'Équipe Inconnue';
-                    const team2Name = team2 ? escapeHtml(team2.name) : 'Équipe Inconnue';
-
-                    const isTeam1Eliminated = window.eliminatedTeams.has(match.team1Id);
-                    const isTeam2Eliminated = window.eliminatedTeams.has(match.team2Id);
-
-                    let team1Class = '';
-                    let team2Class = '';
-
-                    // Appliquer les classes winner-team ou loser-team en fonction des scores
-                    if (match.score1 !== undefined && match.score2 !== undefined) {
-                        if (match.score1 > match.score2) {
-                            team1Class = 'winner-team';
-                            team2Class = 'loser-team';
-                        } else if (match.score2 > match.score1) {
-                            team1Class = 'loser-team';
-                            team2Class = 'winner-team';
-                        }
-                    }
-
-                    // Si l'équipe est marquée comme éliminée, appliquer la classe loser-team
-                    if (isTeam1Eliminated && team1Class !== 'winner-team') { // N'écrase pas si déjà gagnant du match actuel
-                        team1Class = 'loser-team';
-                    }
-                    if (isTeam2Eliminated && team2Class !== 'winner-team') { // N'écrase pas si déjà gagnant du match actuel
-                        team2Class = 'loser-team';
-                    }
-
-                    eliminationHtml += `
-                        <div class="bg-gray-50 p-4 rounded-md shadow-sm">
-                            <h4 class="text-md font-semibold mb-2">Match ${escapeHtml(match.id)}</h4>
-                            <div class="flex items-center space-x-2 mb-2">
-                                <span class="flex-1 text-right font-medium ${team1Class}">${team1Name}</span>
-                                <input type="number" data-round-id="${escapeHtml(roundKey)}" data-match-id="${escapeHtml(match.id)}" data-team-id="${escapeHtml(match.team1Id)}"
-                                    class="elim-score-input w-16 px-2 py-1 border rounded text-center" value="${match.score1 !== undefined ? match.score1 : ''}" min="0">
-                                <span class="font-bold">-</span>
-                                <input type="number" data-round-id="${escapeHtml(roundKey)}" data-match-id="${escapeHtml(match.id)}" data-team-id="${escapeHtml(match.team2Id)}"
-                                    class="elim-score-input w-16 px-2 py-1 border rounded text-center" value="${match.score2 !== undefined ? match.score2 : ''}" min="0">
-                                <span class="flex-1 text-left font-medium ${team2Class}">${team2Name}</span>
-                            </div>
-                            ${match.winnerId ? `<p class="text-sm text-green-700 text-center">Gagnant: ${escapeHtml(window.allTeams.find(t => t.id === match.winnerId)?.name || 'Inconnu')}</p>` : ''}
-                        </div>
-                    `;
-                });
-            }
-
-            eliminationHtml += `
-                    </div>
-                    <div class="flex justify-end mt-4">
-                        <button data-round-id="${escapeHtml(roundKey)}" class="save-elim-scores-btn bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                            Enregistrer Scores
-                        </button>
-                    </div>
-                </div>
-            `;
-        });
-
-        eliminationHtml += `</div>`;
-        APP_CONTAINER.innerHTML = eliminationHtml;
-        setupEliminatoiresPageLogic(); // Attacher les écouteurs d'événements
+        setupEliminatoiresPageLogic();
     }
 
-    /**
-     * Rend la page des classements.
-     */
-    function renderClassementsPage() {
-        if (!APP_CONTAINER || !window.currentTournamentData) {
-            console.error("APP_CONTAINER ou currentTournamentData non trouvé.");
-            return;
+    function setupEliminatoiresPageLogic() {
+        const eliminationBracketsDisplay = document.getElementById('eliminationBracketsDisplay');
+        const eliminationMessage = document.getElementById('eliminationMessage');
+        const generateEliminationPhasesBtn = document.getElementById('generateEliminationPhasesBtn');
+        const resetAllEliminationPhasesBtn = document.getElementById('resetAllEliminationPhasesBtn');
+        // NOUVEAU: Bouton pour accéder à la sélection des équipes éliminées
+        const goToEliminationSelectionBtn = document.getElementById('goToEliminationSelectionBtn');
+
+
+        /**
+         * Generates options for a score select dropdown (0 to maxScore).
+         * @param {number} maxScore The maximum score to include.
+         * @param {number|null} selectedValue The current selected value, or null.
+         * @returns {string} HTML string for select options.
+         */
+        function generateScoreOptions(maxScore, selectedValue) {
+            let options = '<option value="">-</option>'; // Default empty option
+            for (let i = 0; i <= maxScore; i++) {
+                options += `<option value="${i}" ${selectedValue === i ? 'selected' : ''}>${i}</option>`;
+            }
+            return options;
         }
 
-        // 1. Classement général final (basé sur la dernière phase de brassage ou élimination)
-        let finalRankings = [];
-        const lastBrassagePhase = window.allBrassagePhases.filter(p => p.type === window.PHASE_TYPE_INITIAL || p.type === window.PHASE_TYPE_SECONDARY_BRASSAGE).pop();
+        function getTeamsGroupedBySecondaryPhase() {
+            // Find the latest 'elimination_seeding' phase
+            const latestEliminationSeedingPhase = allBrassagePhases
+                .filter(p => p.type === PHASE_TYPE_ELIMINATION_SEEDING)
+                .sort((a, b) => b.timestamp - a.timestamp)[0];
 
-        // Collecter les équipes qui ont été éliminées pour les inclure dans le classement final
-        const eliminatedTeamDetails = Array.from(window.eliminatedTeams).map(teamId => {
-            const team = window.allTeams.find(t => t.id === teamId);
-            return {
-                teamId: teamId,
-                teamName: team ? team.name : 'Inconnu',
-                isEliminated: true,
-                points: -1, // Un score très bas pour les éliminés
-                matchesWon: 0,
-                setRatio: 0
-            };
-        });
+            if (latestEliminationSeedingPhase && latestEliminationSeedingPhase.groupedTeams) {
+                console.log("DEBUG: Secondary ranking phases found:", latestEliminationSeedingPhase.groupedTeams);
+                return latestEliminationSeedingPhase.groupedTeams;
+            } else {
+                showToast("Aucune phase de classement secondaire (Principale, Consolante, Super Consolante) n'a été validée sur la page 'Brassages'. Veuillez les générer et les valider d'abord.", "error");
+                return null;
+            }
+        }
 
-        if (lastBrassagePhase && lastBrassagePhase.rankings && lastBrassagePhase.rankings.length > 0) {
-            // Commencer avec le classement de la dernière phase de brassage
-            // Filtrer les équipes qui sont déjà éliminées (elles seront ajoutées séparément plus tard avec leur statut éliminé)
-            finalRankings = lastBrassagePhase.rankings.filter(r => !window.eliminatedTeams.has(r.teamId));
+        /**
+         * Determines the round name based on the number of TEAMS in the round.
+         * This is more logical for tournament naming (e.g., "8th Final" means 8 matches, 16 teams)
+         * @param {number} numTeamsInRound The number of teams starting this round.
+         * @returns {string} The round name.
+         */
+        function getRoundNameFromTeamsCount(numTeamsInRound) {
+            if (numTeamsInRound === 2) return 'Finale';
+            if (numTeamsInRound === 4) return 'Demi-Finales';
+            if (numTeamsInRound === 8) return 'Quart de Finale';
+            if (numTeamsInRound === 16) return '8ème de Finale';
+            if (numTeamsInRound === 32) return '16ème de Finale';
+            if (numTeamsInRound === 64) return '32ème de Finale';
+            // Fallback for non-standard power of 2 initial rounds (e.g., if byes were handled by having some teams auto-advance)
+            return `Tour Éliminatoire (${numTeamsInRound} équipes)`; // Generic fallback
+        }
 
-            // Ajuster les points pour les équipes qui ont progressé dans les éliminatoires (complexité à ajouter si besoin)
-            // Pour l'instant, le classement final est basé sur le brassage + les éliminés en bas
 
-            // Si des phases éliminatoires ont été jouées, les équipes non-éliminées sont les finalistes.
-            const allEliminatedThisRound = new Set();
-            let winnersFromLastElimRound = new Set();
-            let currentRoundTeams = new Set();
+        function generateBracketData(teams, groupType) {
+            // NOUVEAU: Filtrer les équipes éliminées avant de générer le bracket
+            const eligibleTeamsInGroup = teams.filter(team => !eliminatedTeams.has(team.id));
 
-            const eliminationRoundKeys = Object.keys(window.eliminationPhases).sort();
-            if (eliminationRoundKeys.length > 0) {
-                const lastEliminationRoundKey = eliminationRoundKeys[eliminationRoundKeys.length - 1];
-                const lastEliminationRound = window.eliminationPhases[lastEliminationRoundKey];
+            if (eligibleTeamsInGroup.length < 2) {
+                return { rounds: [], message: `Pas assez d'équipes éligibles dans le groupe ${groupType} pour un tournoi à élimination (${eligibleTeamsInGroup.length} équipe(s) restante(s)).` };
+            }
 
-                lastEliminationRound.matches.forEach(match => {
+            let currentParticipants = [...eligibleTeamsInGroup]; // Teams currently in play for this bracket
+            let rounds = []; // Array to store all generated rounds
+
+            // Sort initial teams based on their global ranking for seeding
+            currentParticipants.sort((a, b) => {
+                const pointsA = a.totalPoints || 0;
+                const pointsB = b.totalPoints || 0;
+                const diffA = a.totalDiffScore || 0;
+                const diffB = b.totalDiffScore || 0;
+
+                if (pointsB !== pointsA) return pointsB - pointsA;
+                if (diffB !== diffA) return diffB - diffA;
+                return a.name.localeCompare(b.name); // Secondary sort by name for tie-breaking
+            });
+
+            // Calculate the nearest power of 2 for the bracket size
+            let bracketSize = 2;
+            while (bracketSize < currentParticipants.length) {
+                bracketSize *= 2;
+            }
+
+            const numberOfByes = bracketSize - currentParticipants.length;
+
+            let teamsAdvancingToNextRound = []; // Will hold winners and bye teams
+
+            // Handle initial byes if any
+            if (numberOfByes > 0) {
+                // Top ranked teams get byes
+                const byeTeams = currentParticipants.slice(0, numberOfByes);
+                teamsAdvancingToNextRound.push(...byeTeams.map(team => ({
+                    id: team.id,
+                    name: team.name,
+                    isBye: true // Mark as a bye team for later identification
+                })));
+                currentParticipants = currentParticipants.slice(numberOfByes); // Remaining teams will play
+            }
+
+            // Create initial matches for teams that actually play in Round 1
+            let roundMatches = [];
+            let currentRoundPlayers = [...currentParticipants]; // Teams actively playing in this round
+
+            for (let i = 0; i < Math.ceil(currentRoundPlayers.length / 2); i++) {
+                const team1 = currentRoundPlayers[i];
+                const team2 = currentRoundPlayers[currentRoundPlayers.length - 1 - i]; // Serpentine seeding
+
+                if (team1 && team2) {
+                    roundMatches.push({
+                        id: `elim_match_${groupType}_R0_M${roundMatches.length}`,
+                        team1: team1,
+                        team2: team2,
+                        score1: null,
+                        score2: null,
+                        winnerId: null,
+                        loserId: null,
+                        nextMatchId: null // To be filled later
+                    });
+                }
+            }
+
+            if (roundMatches.length > 0) {
+                rounds.push({ roundName: getRoundNameFromTeamsCount(currentRoundPlayers.length), matches: roundMatches });
+            }
+
+
+            let prevRoundMatches = roundMatches; // This refers to the actual matches played in the first round (if any)
+            let roundIdx = 1; // Start counting from Round 1 for subsequent rounds
+
+            // Loop to generate subsequent rounds
+            while (true) {
+                let teamsForNextRound = [];
+                // Add teams that got a bye in the *previous* logical step (only applies if first round had byes)
+                if (roundIdx === 1 && numberOfByes > 0) {
+                    teamsForNextRound.push(...teamsAdvancingToNextRound); // These are the initial bye teams
+                }
+
+                // Collect winners from the *previous* actual playing round
+                prevRoundMatches.forEach(match => {
                     if (match.winnerId) {
-                        winnersFromLastElimRound.add(match.winnerId);
-                    }
-                    if (match.loserId) {
-                        allEliminatedThisRound.add(match.loserId);
-                    }
-                    currentRoundTeams.add(match.team1Id);
-                    currentRoundTeams.add(match.team2Id);
-                });
-
-                // Les équipes restantes dans `finalRankings` sont celles qui n'ont pas été éliminées
-                // et ne sont pas gagnantes de la dernière ronde (car elles n'étaient pas dans cette ronde ou ont perdu plus tôt)
-                const qualifiedTeamsNotEliminatedYet = window.allTeams.filter(team => !window.eliminatedTeams.has(team.id));
-
-                // Reconstruire le classement final avec les gagnants de la dernière ronde en tête
-                // Puis les autres qualifiés non éliminés, puis les éliminés
-                let topRankedTeams = [];
-                let midRankedTeams = []; // Équipes qui n'ont pas atteint la dernière ronde ou n'ont pas gagné la dernière ronde mais ne sont pas éliminées.
-
-                qualifiedTeamsNotEliminatedYet.forEach(team => {
-                    const teamRankingInfo = lastBrassagePhase.rankings.find(r => r.teamId === team.id) || {
-                        teamId: team.id,
-                        teamName: team.name,
-                        points: 0,
-                        matchesWon: 0,
-                        setRatio: 0
-                    }; // Fallback info
-
-                    if (winnersFromLastElimRound.has(team.id)) {
-                        // Ces équipes sont les meilleures si elles ont gagné la dernière ronde
-                        topRankedTeams.push({ ...teamRankingInfo, isWinner: true, finalRankTier: 1 });
-                    } else if (currentRoundTeams.has(team.id) && !allEliminatedThisRound.has(team.id)) {
-                         // Équipes du dernier tour mais n'étant pas le gagnant, et non éliminées encore
-                         // Cela peut arriver s'il y a un match nul ou un bye par ex.
-                        midRankedTeams.push({ ...teamRankingInfo, finalRankTier: 2 });
-                    } else if (!window.eliminatedTeams.has(team.id)) {
-                        // Équipes qui ne sont pas éliminées mais n'ont pas participé aux dernières rondes
-                        midRankedTeams.push({ ...teamRankingInfo, finalRankTier: 3 });
+                        teamsForNextRound.push(allTeams.find(t => t.id === match.winnerId) || match.team1 || match.team2);
+                    } else {
+                        // If winner is not determined, add placeholder to ensure bracket structure
+                        teamsForNextRound.push({ id: null, name: 'À déterminer' });
                     }
                 });
 
-                // Trier les différentes couches
-                topRankedTeams.sort((a, b) => b.points - a.points || b.matchesWon - a.matchesWon || b.setRatio - a.setRatio);
-                midRankedTeams.sort((a, b) => b.points - a.points || b.matchesWon - a.matchesWon || b.setRatio - a.setRatio);
-                eliminatedTeamDetails.sort((a, b) => b.points - a.points || b.matchesWon - a.matchesWon || b.setRatio - a.setRatio); // Tri sur -1, donc alphabétique pour les noms
-
-                finalRankings = [...topRankedTeams, ...midRankedTeams, ...eliminatedTeamDetails];
-
-            } else {
-                 // S'il n'y a pas de phases éliminatoires, le classement est juste celui du brassage + les éliminés (si applicable)
-                 finalRankings = [...lastBrassagePhase.rankings, ...eliminatedTeamDetails];
-                 finalRankings.sort((a, b) => {
-                     if (b.points !== a.points) return b.points - a.points;
-                     if (b.matchesWon !== a.matchesWon) return b.matchesWon - a.matchesWon;
-                     return b.setRatio - a.setRatio;
-                 });
-            }
-
-        } else if (window.allTeams.length > 0) {
-             // Si aucune phase de brassage n'a été générée, liste juste les équipes et les éliminées
-            finalRankings = window.allTeams.map(team => ({
-                teamId: team.id,
-                teamName: team.name,
-                isEliminated: window.eliminatedTeams.has(team.id),
-                points: window.eliminatedTeams.has(team.id) ? -1 : 0,
-                matchesWon: 0,
-                setRatio: 0
-            }));
-            finalRankings.sort((a, b) => {
-                 if (a.isEliminated === b.isEliminated) {
-                     return a.teamName.localeCompare(b.teamName); // Alphabétique si même statut
-                 }
-                 return a.isEliminated ? 1 : -1; // Éliminés en bas
-             });
-        }
-
-
-        let classementHtml = `
-            <h2 class="text-2xl font-bold text-blue-600 mb-6 text-center">Classements</h2>
-            ${finalRankings.length === 0 ? `<p class="text-gray-600">Aucun classement disponible pour l'instant. Ajoutez des équipes et générez des brassages.</p>` : `
-                <div class="bg-white rounded-lg shadow-md overflow-hidden mb-8">
-                    <h3 class="text-xl font-bold text-gray-800 p-4 border-b">Classement Général Final</h3>
-                    <table class="min-w-full divide-y divide-gray-200">
-                        <thead class="bg-gray-50">
-                            <tr>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rang</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Équipe</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Matchs Joués</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Matchs Gagnés</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sets Gagnés</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sets Perdus</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ratio Sets</th>
-                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Statut</th>
-                            </tr>
-                        </thead>
-                        <tbody class="bg-white divide-y divide-gray-200">
-                            ${finalRankings.map((ranking, index) => {
-                                const team = window.allTeams.find(t => t.id === ranking.teamId);
-                                const isEliminated = window.eliminatedTeams.has(ranking.teamId);
-                                const rowClass = isEliminated ? 'text-red-500 line-through opacity-75' : '';
-                                return `
-                                    <tr class="${rowClass}">
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${index + 1}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${escapeHtml(ranking.teamName)}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${ranking.points !== -1 ? ranking.points : 'N/A'}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${ranking.matchesPlayed !== undefined ? ranking.matchesPlayed : 'N/A'}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${ranking.matchesWon !== undefined ? ranking.matchesWon : 'N/A'}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${ranking.setsWon !== undefined ? ranking.setsWon : 'N/A'}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${ranking.setsLost !== undefined ? ranking.setsLost : 'N/A'}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${ranking.setRatio !== undefined && !isNaN(ranking.setRatio) ? ranking.setRatio.toFixed(2) : 'N/A'}</td>
-                                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${isEliminated ? 'Éliminé' : 'En jeu'}</td>
-                                    </tr>
-                                `;
-                            }).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            `}
-
-            ${window.allBrassagePhases.length > 0 ? `
-                <div class="mb-8">
-                    <h3 class="text-xl font-bold text-blue-600 mb-4">Classements par Phase de Brassage</h3>
-                    ${window.allBrassagePhases.map(phase => `
-                        <div class="bg-white p-6 rounded-lg shadow-md mb-6">
-                            <h4 class="text-lg font-bold text-gray-800 mb-4">${escapeHtml(phase.name)}</h4>
-                            ${!phase.generated || !phase.pools || phase.pools.length === 0 ? `<p class="text-gray-600">Cette phase n'a pas encore été générée ou ne contient pas de poules.</p>` : `
-                                ${phase.pools.map((pool, poolIndex) => `
-                                    <div class="mb-4">
-                                        <h5 class="text-md font-semibold text-gray-700 mb-2">Poule ${String.fromCharCode(65 + poolIndex)}</h5>
-                                        ${pool.rankings && pool.rankings.length > 0 ? `
-                                            <table class="min-w-full divide-y divide-gray-200">
-                                                <thead class="bg-gray-50">
-                                                    <tr>
-                                                        <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rang</th>
-                                                        <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Équipe</th>
-                                                        <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
-                                                        <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Matchs G.</th>
-                                                        <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sets G.</th>
-                                                        <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sets P.</th>
-                                                        <th scope="col" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ratio Sets</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody class="bg-white divide-y divide-gray-200">
-                                                    ${pool.rankings.map((ranking, rankIndex) => `
-                                                        <tr>
-                                                            <td class="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900">${rankIndex + 1}</td>
-                                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-900">${escapeHtml(ranking.teamName)}</td>
-                                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-500">${ranking.points}</td>
-                                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-500">${ranking.matchesWon}</td>
-                                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-500">${ranking.setsWon}</td>
-                                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-500">${ranking.setsLost}</td>
-                                                            <td class="px-4 py-2 whitespace-nowrap text-sm text-gray-500">${ranking.setRatio.toFixed(2)}</td>
-                                                        </tr>
-                                                    `).join('')}
-                                                </tbody>
-                                            </table>
-                                        ` : `<p class="text-gray-600">Aucun classement disponible pour cette poule.</p>`}
-                                    </div>
-                                `).join('')}
-                            `}
-                        </div>
-                    `).join('')}
-                </div>
-            ` : ''}
-        `;
-        APP_CONTAINER.innerHTML = classementHtml;
-        setupClassementsPageLogic();
-    }
-    // --- Logique des Pages (Écouteurs d'Événements) ---
-
-    /**
-     * Attache les écouteurs d'événements pour le formulaire d'authentification.
-     * Cette fonction est appelée après que le HTML de la page d'authentification soit rendu.
-     */
-    function setupAuthPageLogic() {
-        const authForm = document.getElementById('auth-form');
-        const emailInput = document.getElementById('email');
-        const passwordInput = document.getElementById('password');
-        const authSubmitBtn = document.getElementById('auth-submit-btn');
-        const toggleAuthModeBtn = document.getElementById('toggle-auth-mode');
-        const authHeader = document.getElementById('auth-header');
-
-        if (!authForm || !emailInput || !passwordInput || !authSubmitBtn || !toggleAuthModeBtn || !authHeader) {
-            console.error("Éléments du formulaire d'authentification non trouvés après le rendu.");
-            return;
-        }
-
-        let isLoginMode = true; // true pour connexion, false pour inscription
-
-        const updateAuthModeUI = () => {
-            if (isLoginMode) {
-                authHeader.textContent = 'Connexion';
-                authSubmitBtn.textContent = 'Se connecter';
-                toggleAuthModeBtn.textContent = 'Créer un compte';
-            } else {
-                authHeader.textContent = 'Inscription';
-                authSubmitBtn.textContent = 'S\'inscrire';
-                toggleAuthModeBtn.textContent = 'Déjà un compte ? Connectez-vous';
-            }
-        };
-
-        toggleAuthModeBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            isLoginMode = !isLoginMode;
-            updateAuthModeUI();
-        });
-
-        authForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const email = emailInput.value;
-            const password = passwordInput.value;
-
-            if (!email || !password) {
-                showToast("Veuillez entrer votre email et votre mot de passe.", "error");
-                return;
-            }
-
-            try {
-                if (isLoginMode) {
-                    await window.signInWithEmailAndPassword(window.auth, email, password);
-                    showToast("Connexion réussie !", "success");
-                } else {
-                    await window.createUserWithEmailAndPassword(window.auth, email, password);
-                    showToast("Compte créé avec succès ! Vous êtes maintenant connecté.", "success");
-                }
-                // Redirection gérée par onAuthStateChanged qui appelle handleLocationHash
-            } catch (error) {
-                console.error("Erreur d'authentification:", error);
-                let errorMessage = "Une erreur est survenue lors de l'authentification.";
-                switch (error.code) {
-                    case 'auth/email-already-in-use':
-                        errorMessage = "Cet email est déjà utilisé par un autre compte.";
-                        break;
-                    case 'auth/invalid-email':
-                        errorMessage = "L'adresse email est invalide.";
-                        break;
-                    case 'auth/operation-not-allowed':
-                        errorMessage = "L'authentification par email/mot de passe n'est pas activée.";
-                        break;
-                    case 'auth/weak-password':
-                        errorMessage = "Le mot de passe est trop faible.";
-                        break;
-                    case 'auth/user-disabled':
-                        errorMessage = "Votre compte a été désactivé.";
-                        break;
-                    case 'auth/user-not-found':
-                    case 'auth/wrong-password':
-                        errorMessage = "Email ou mot de passe incorrect.";
-                        break;
-                    case 'auth/missing-password':
-                        errorMessage = "Veuillez entrer un mot de passe.";
-                        break;
-                    case 'auth/too-many-requests':
-                        errorMessage = "Trop de tentatives de connexion échouées. Veuillez réessayer plus tard.";
-                        break;
-                }
-                showToast(errorMessage, "error");
-            }
-        });
-
-        updateAuthModeUI(); // Initialise l'UI au chargement
-    }
-
-    /**
-     * Attache les écouteurs d'événements pour le tableau de bord des tournois.
-     */
-    function setupTournamentDashboardLogic() {
-        document.querySelectorAll('.select-tournament-btn').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const tournamentId = e.target.dataset.tournamentId;
-                if (tournamentId && window.currentTournamentId !== tournamentId) {
-                    window.selectTournament(tournamentId);
-                }
-            });
-        });
-
-        document.querySelectorAll('.delete-tournament-btn').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const tournamentId = e.target.dataset.tournamentId;
-                if (tournamentId) {
-                    window.deleteTournament(tournamentId);
-                }
-            });
-        });
-
-        const showCreateFormBtn = document.getElementById('show-create-tournament-form');
-        if (showCreateFormBtn) {
-            showCreateFormBtn.addEventListener('click', () => {
-                const existingForm = document.getElementById('create-tournament-form');
-                if (existingForm) return; // Prevent multiple forms
-
-                const createFormContainer = document.createElement('div');
-                createFormContainer.innerHTML = `
-                    <div class="max-w-md w-full bg-white p-8 rounded-lg shadow-md mt-10 mx-auto">
-                        <h3 class="text-xl font-bold text-blue-600 mb-4">Créer un nouveau tournoi</h3>
-                        <form id="create-tournament-form">
-                            <div class="mb-4">
-                                <label for="new-tournament-name" class="block text-gray-700 text-sm font-bold mb-2">Nom du tournoi:</label>
-                                <input type="text" id="new-tournament-name" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-                            </div>
-                            <div class="mb-4">
-                                <label for="new-tournament-date" class="block text-gray-700 text-sm font-bold mb-2">Date (AAAA-MM-JJ):</label>
-                                <input type="date" id="new-tournament-date" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" required>
-                            </div>
-                            <div class="mb-6">
-                                <label for="new-tournament-num-teams" class="block text-gray-700 text-sm font-bold mb-2">Nombre d'équipes prévues:</label>
-                                <input type="number" id="new-tournament-num-teams" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" min="2" required>
-                            </div>
-                            <div class="flex justify-end space-x-3">
-                                <button type="button" id="cancel-create-tournament" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded transition duration-150">
-                                    Annuler
-                                </button>
-                                <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition duration-150">
-                                    Créer
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                `;
-                // Add the new form to APP_CONTAINER
-                APP_CONTAINER.innerHTML = ''; // Clear existing list/message before adding form
-                APP_CONTAINER.appendChild(createFormContainer);
-                // Re-attach logic for the new form
-                const newTournamentForm = document.getElementById('create-tournament-form');
-                const cancelCreateBtn = document.getElementById('cancel-create-tournament');
-                if (newTournamentForm && cancelCreateBtn) {
-                    newTournamentForm.addEventListener('submit', async (e) => {
-                        e.preventDefault();
-                        const name = document.getElementById('new-tournament-name').value;
-                        const date = document.getElementById('new-tournament-date').value;
-                        const numTeams = parseInt(document.getElementById('new-tournament-num-teams').value, 10);
-                        await window.createNewTournament(name, date, numTeams);
-                        // After creation, the dashboard will re-render via the Firestore snapshot listener
-                    });
-                    cancelCreateBtn.addEventListener('click', () => {
-                        renderTournamentDashboard(); // Go back to the list/empty message
-                    });
-                }
-            });
-        }
-    }
-
-
-    /**
-     * Attache les écouteurs d'événements pour la page des équipes.
-     */
-    function setupEquipesPageLogic() {
-        const addTeamForm = document.getElementById('add-team-form');
-        if (addTeamForm) {
-            addTeamForm.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const teamNameInput = document.getElementById('team-name');
-                const teamLevelInput = document.getElementById('team-level');
-                const teamName = teamNameInput.value.trim();
-                const teamLevel = parseInt(teamLevelInput.value, 10);
-
-                if (teamName && !isNaN(teamLevel) && teamLevel >= 1 && teamLevel <= 10) {
-                    await window.addTeam(teamName, teamLevel);
-                    teamNameInput.value = ''; // Réinitialiser le champ
-                    teamLevelInput.value = '5'; // Réinitialiser le niveau par défaut
-                } else {
-                    window.showToast("Veuillez entrer un nom d'équipe valide et un niveau entre 1 et 10.", "error");
-                }
-            });
-        }
-
-        document.querySelectorAll('.edit-team-btn').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const teamId = e.target.dataset.teamId;
-                const team = window.allTeams.find(t => t.id === teamId);
-                if (team) {
-                    const content = document.createElement('div');
-                    content.innerHTML = `
-                        <div class="mb-4">
-                            <label for="edit-team-name" class="block text-gray-700 text-sm font-bold mb-2">Nom de l'équipe:</label>
-                            <input type="text" id="edit-team-name" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" value="${escapeHtml(team.name)}" required>
-                        </div>
-                        <div class="mb-4">
-                            <label for="edit-team-level" class="block text-gray-700 text-sm font-bold mb-2">Niveau (1-10, 1 étant le plus fort):</label>
-                            <input type="number" id="edit-team-level" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" min="1" max="10" value="${escapeHtml(String(team.level))}" required>
-                        </div>
-                    `;
-                    window.showModal('Modifier l\'équipe', content, async () => {
-                        const newName = document.getElementById('edit-team-name').value.trim();
-                        const newLevel = parseInt(document.getElementById('edit-team-level').value, 10);
-
-                        if (newName && !isNaN(newLevel) && newLevel >= 1 && newLevel <= 10) {
-                            if (newName !== team.name || newLevel !== team.level) {
-                                await window.updateTeam(teamId, newName, newLevel);
-                            } else {
-                                window.showToast("Aucune modification détectée.", "info");
-                            }
-                        } else {
-                            window.showToast("Veuillez entrer un nom d'équipe valide et un niveau entre 1 et 10.", "error");
-                        }
-                    });
-                }
-            });
-        });
-
-        document.querySelectorAll('.delete-team-btn').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const teamId = e.target.dataset.teamId;
-                const team = window.allTeams.find(t => t.id === teamId);
-                if (team) {
-                    const content = document.createElement('p');
-                    content.textContent = `Êtes-vous sûr de vouloir supprimer l'équipe "${escapeHtml(team.name)}" ?`;
-                    window.showModal('Confirmer la suppression', content, async () => {
-                        await window.deleteTeam(teamId);
-                    }, true);
-                }
-            });
-        });
-    }
-
-    /**
-     * Attache les écouteurs d'événements pour la page de gestion des brassages.
-     */
-    function setupBrassagesPageLogic() {
-        document.getElementById('generate-initial-brassage')?.addEventListener('click', () => {
-            window.showModal('Confirmer la génération', document.createTextNode('Ceci va générer la phase de brassage initiale. Continuer ?'), () => {
-                window.generateAndEvaluatePools(window.PHASE_TYPE_INITIAL);
-            });
-        });
-
-        document.getElementById('generate-secondary-brassage')?.addEventListener('click', () => {
-            const lastPhase = window.allBrassagePhases[window.allBrassagePhases.length - 1];
-            if (!lastPhase || !lastPhase.generated || !lastPhase.rankings) {
-                window.showToast("Veuillez générer et compléter la phase précédente pour générer un brassage secondaire.", "error");
-                return;
-            }
-            window.showModal('Confirmer la génération', document.createTextNode('Ceci va générer une nouvelle phase de brassage secondaire basée sur les résultats précédents. Continuer ?'), () => {
-                window.generateSecondaryBrassagePhases();
-            });
-        });
-
-        document.getElementById('generate-elimination-seeding')?.addEventListener('click', () => {
-            const lastPhase = window.allBrassagePhases[window.allBrassagePhases.length - 1];
-            if (!lastPhase || !lastPhase.generated || !lastPhase.rankings) {
-                window.showToast("Veuillez générer et compléter une phase de brassage avant de préparer les groupes éliminatoires.", "error");
-                return;
-            }
-            window.location.hash = '#elimination-selection'; // Rediriger vers la page de sélection des groupes
-        });
-
-        document.getElementById('clear-all-brassage-phases')?.addEventListener('click', () => {
-            window.showModal('Confirmer l\'effacement', document.createTextNode('Êtes-vous sûr de vouloir effacer TOUTES les phases de brassage et d\'élimination ? Cette action est irréversible.'), () => {
-                window.clearAllPhases();
-            }, true);
-        });
-
-        document.querySelectorAll('.view-phase-btn').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const phaseId = e.target.dataset.phaseId;
-                if (window.currentDisplayedPhaseId === phaseId) {
-                    window.currentDisplayedPhaseId = null; // Masquer
-                } else {
-                    window.currentDisplayedPhaseId = phaseId; // Afficher
-                }
-                window.saveAllData(); // Sauvegarder l'ID de la phase affichée
-                window.renderBrassagesPage(); // Re-render la page pour mettre à jour l'affichage
-            });
-        });
-    }
-
-    /**
-     * Attache les écouteurs d'événements pour les détails de la phase de brassage.
-     */
-    function setupBrassagePhaseDetailsLogic() {
-        // Sauvegarde des scores
-        document.getElementById('save-matches-btn')?.addEventListener('click', async () => {
-            const currentPhase = window.allBrassagePhases.find(p => p.id === window.currentDisplayedPhaseId);
-            if (!currentPhase) {
-                window.showToast("Aucune phase sélectionnée pour la sauvegarde.", "error");
-                return;
-            }
-
-            let allScoresEntered = true;
-            document.querySelectorAll('.match-score-input').forEach(input => {
-                const matchId = input.dataset.matchId;
-                const teamId = input.dataset.teamId;
-                const score = parseInt(input.value, 10);
-
-                if (isNaN(score)) {
-                    allScoresEntered = false;
-                    return;
+                if (teamsForNextRound.length <= 1) { // Stop if only one winner or no more teams
+                    break;
                 }
 
-                currentPhase.pools.forEach(pool => {
-                    pool.matches.forEach(match => {
-                        if (match.id === matchId) {
-                            if (match.team1Id === teamId) {
-                                match.score1 = score;
-                            } else if (match.team2Id === teamId) {
-                                match.score2 = score;
-                            }
-                        }
-                    });
-                });
-            });
+                // Sort teams for this round's pairing (might not be needed if previous propagation was perfect, but for robustness)
+                // However, for single elimination, after the initial seeding, subsequent pairings are determined by bracket position, not re-ranking.
+                // So, no re-sort here based on total points. The order comes from previous matches.
 
-            if (!allScoresEntered) {
-                window.showToast("Veuillez entrer tous les scores avant de sauvegarder.", "error");
-                return;
-            }
+                let nextRoundMatches = [];
+                const numMatchesInThisRound = Math.floor(teamsForNextRound.length / 2);
 
-            // Calculer les points et le classement après l'enregistrement des scores
-            currentPhase.pools.forEach(pool => {
-                const teamStats = {}; // { teamId: { points: 0, setsWon: 0, setsLost: 0, matchesPlayed: 0, matchesWon: 0 } }
-                pool.teams.forEach(teamId => {
-                    teamStats[teamId] = { points: 0, setsWon: 0, setsLost: 0, matchesPlayed: 0, matchesWon: 0 };
-                });
+                for (let i = 0; i < numMatchesInThisRound; i++) {
+                    const team1 = teamsForNextRound[i];
+                    const team2 = teamsForNextRound[teamsForNextRound.length - 1 - i];
 
-                pool.matches.forEach(match => {
-                    if (match.score1 !== undefined && match.score2 !== undefined) {
-                        const team1Stats = teamStats[match.team1Id];
-                        const team2Stats = teamStats[match.team2Id];
-
-                        team1Stats.matchesPlayed++;
-                        team2Stats.matchesPlayed++;
-
-                        // Calcul des sets (chaque point est un set dans ce contexte simplifié)
-                        team1Stats.setsWon += match.score1;
-                        team1Stats.setsLost += match.score2;
-                        team2Stats.setsWon += match.score2;
-                        team2Stats.setsLost += match.score1;
-
-                        if (match.score1 > match.score2) {
-                            team1Stats.points += 8; // Victoire
-                            team1Stats.matchesWon++;
-                        } else if (match.score2 > match.score1) {
-                            team2Stats.points += 8; // Victoire
-                            team2Stats.matchesWon++;
-                        } else {
-                            // En cas de match nul, attribuer 4 points à chaque équipe
-                            team1Stats.points += 4;
-                            team2Stats.points += 4;
-                        }
-                    }
-                });
-
-                // Convertir en tableau pour le tri
-                pool.rankings = Object.entries(teamStats).map(([teamId, stats]) => {
-                    const team = window.allTeams.find(t => t.id === teamId);
-                    return {
-                        teamId: teamId,
-                        teamName: team ? team.name : 'Inconnu',
-                        ...stats,
-                        setRatio: stats.setsLost > 0 ? stats.setsWon / stats.setsLost : stats.setsWon // ratio sets
+                    const match = {
+                        id: `elim_match_${groupType}_R${roundIdx}_M${i}`,
+                        team1: team1,
+                        team2: team2,
+                        score1: null,
+                        score2: null,
+                        winnerId: null,
+                        loserId: null,
+                        prevMatch1Id: prevRoundMatches[i*2] ? prevRoundMatches[i*2].id : null, // Link to previous matches
+                        prevMatch2Id: prevRoundMatches[i*2 + 1] ? prevRoundMatches[i*2 + 1].id : null,
+                        nextMatchId: null
                     };
-                });
+                    nextRoundMatches.push(match);
 
-                // Trier le classement: points > matchs gagnés > ratio sets
-                pool.rankings.sort((a, b) => {
-                    if (b.points !== a.points) return b.points - a.points;
-                    if (b.matchesWon !== a.matchesWon) return b.matchesWon - a.matchesWon;
-                    return b.setRatio - a.setRatio;
-                });
-            });
-
-            currentPhase.generated = isBrassagePhaseComplete(window.currentDisplayedPhaseId); // Marquer la phase comme complétée après sauvegarde des scores
-            await window.saveAllData();
-            window.showToast("Scores et classements sauvegardés !", "success");
-            window.renderBrassagesPage(); // Re-render pour afficher le statut mis à jour
-        });
-
-        // Toggle repeated matches display
-        document.getElementById('toggleRepeatedMatchesDisplay')?.addEventListener('change', () => {
-            window.renderCurrentBrassagePhaseDetails(); // Re-render pour appliquer le filtre
-        });
-
-        // Import scores via Excel
-        const importScoresBtn = document.getElementById('import-scores-btn');
-        const importScoresFileInput = document.getElementById('import-scores-file-input');
-
-        if (importScoresBtn && importScoresFileInput) {
-            importScoresBtn.addEventListener('click', () => {
-                importScoresFileInput.click();
-            });
-
-            importScoresFileInput.addEventListener('change', (event) => {
-                const file = event.target.files[0];
-                if (file) {
-                    const reader = new FileReader();
-                    reader.onload = async (e) => {
-                        try {
-                            const data = new Uint8Array(e.target.result);
-                            const workbook = XLSX.read(data, { type: 'array' });
-                            const firstSheetName = workbook.SheetNames[0];
-                            const worksheet = workbook.Sheets[firstSheetName];
-                            const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-
-                            await window.importScoresFromExcel(json);
-                        } catch (error) {
-                            console.error("Erreur lors de la lecture du fichier Excel:", error);
-                            window.showToast("Erreur lors de l'importation du fichier Excel.", "error");
-                        }
-                    };
-                    reader.readAsArrayBuffer(file);
+                    // Update `nextMatchId` for previous matches
+                    if (prevRoundMatches[i*2]) prevRoundMatches[i*2].nextMatchId = match.id;
+                    if (prevRoundMatches[i*2 + 1]) prevRoundMatches[i*2 + 1].nextMatchId = match.id;
                 }
-            });
-        }
+                
+                rounds.push({ roundName: getRoundNameFromTeamsCount(teamsForNextRound.length), matches: nextRoundMatches });
+                prevRoundMatches = nextRoundMatches;
+                roundIdx++;
 
-        // Export scores to Excel
-        document.getElementById('export-scores-btn')?.addEventListener('click', () => {
-            window.exportScoresToExcel();
-        });
-
-        // Validation des groupes pour les éliminatoires (si c'est une phase de type élimination_seeding)
-        document.getElementById('validate-groups-btn')?.addEventListener('click', async () => {
-            const currentPhase = window.allBrassagePhases.find(p => p.id === window.currentDisplayedPhaseId);
-            if (!currentPhase || currentPhase.type !== window.PHASE_TYPE_ELIMINATION_SEEDING) {
-                window.showToast("Cette fonction n'est disponible que pour les phases de groupes éliminatoires.", "error");
-                return;
-            }
-
-            const content = document.createElement('div');
-            content.innerHTML = `
-                <p class="mb-4">Souhaitez-vous valider ces groupes pour générer les éliminatoires ?</p>
-                <div class="mb-4">
-                    <label for="elimination-type" class="block text-gray-700 text-sm font-bold mb-2">Type d'élimination:</label>
-                    <select id="elimination-type" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline">
-                        <option value="direct">Élimination directe</option>
-                        <option value="consolation">Élimination avec consolante (pour les 1er tours)</option>
-                    </select>
-                </div>
-                <div class="mb-4">
-                    <label for="number-of-rounds" class="block text-gray-700 text-sm font-bold mb-2">Nombre de tours:</label>
-                    <input type="number" id="number-of-rounds" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" min="1" value="1">
-                </div>
-            `;
-            window.showModal('Valider les groupes éliminatoires', content, async () => {
-                const eliminationType = document.getElementById('elimination-type').value;
-                const numberOfRounds = parseInt(document.getElementById('number-of-rounds').value, 10);
-                if (eliminationType === 'direct') {
-                    await window.validateForDirectElimination(currentPhase.id, numberOfRounds);
-                } else {
-                    // Logique pour l'élimination avec consolante
-                    window.showToast("L'élimination avec consolante n'est pas encore implémentée.", "info");
-                    // await window.validateForConsolationElimination(currentPhase.id);
-                }
-            });
-        });
-
-        document.getElementById('reset-elimination-groups-btn')?.addEventListener('click', async () => {
-            const currentPhase = window.allBrassagePhases.find(p => p.id === window.currentDisplayedPhaseId);
-            if (!currentPhase || currentPhase.type !== window.PHASE_TYPE_ELIMINATION_SEEDING) {
-                window.showToast("Cette fonction n'est disponible que pour les phases de groupes éliminatoires.", "error");
-                return;
-            }
-            window.showModal('Confirmer la réinitialisation', document.createTextNode('Êtes-vous sûr de vouloir réinitialiser les groupes éliminatoires ? Cela effacera la sélection actuelle.'), async () => {
-                window.currentSecondaryGroupsPreview.groups = {}; // Vider la prévisualisation
-                currentPhase.pools = []; // Vider les poules de la phase de seeding
-                currentPhase.generated = false; // Marquer comme non généré
-                window.eliminationPhases = {}; // Vider les phases d'élimination générées
-                window.eliminatedTeams.clear(); // Vider les équipes éliminées
-                await window.saveAllData();
-                window.showToast("Groupes éliminatoires réinitialisés.", "info");
-                window.renderBrassagesPage(); // Re-render la page
-            }, true);
-        });
-    }
-
-    /**
-     * Attache les écouteurs d'événements pour la page de sélection des groupes d'élimination.
-     */
-    function setupEliminationSelectionPageLogic() {
-        // Fonctions pour gérer les entrées du nombre de groupes et d'équipes par groupe
-        const numGroupsInput = document.getElementById('num-groups-elimination');
-        const teamsPerGroupInput = document.getElementById('teams-per-group-elimination');
-
-        // Récupérer les données de la dernière phase de brassage pour les équipes classées
-        const lastBrassagePhase = window.allBrassagePhases.filter(p => p.type === window.PHASE_TYPE_INITIAL || p.type === window.PHASE_TYPE_SECONDARY_BRASSAGE).pop();
-        const teamsRanked = lastBrassagePhase.rankings.map(ranking => {
-            return {
-                id: ranking.teamId,
-                name: ranking.teamName,
-                score: ranking.points // Utiliser les points comme score de classement initial
-            };
-        });
-
-        document.getElementById('auto-distribute-teams')?.addEventListener('click', () => {
-            const numGroups = parseInt(numGroupsInput.value, 10);
-            const teamsPerGroup = parseInt(teamsPerGroupInput.value, 10);
-
-            if (isNaN(numGroups) || numGroups < 2 || isNaN(teamsPerGroup) || teamsPerGroup < 2) {
-                window.showToast("Veuillez spécifier un nombre valide de groupes (>=2) et d'équipes par groupe (>=2).", "error");
-                return;
-            }
-            if (numGroups * teamsPerGroup > teamsRanked.length) {
-                window.showToast(`Vous ne pouvez pas créer ${numGroups} groupes de ${teamsPerGroup} équipes, car vous n'avez que ${teamsRanked.length} équipes qualifiées.`, "error");
-                return;
-            }
-
-            window._performSecondaryGroupsPreview(teamsRanked, numGroups, teamsPerGroup);
-            window.renderEliminationSelectionPage(); // Re-render pour afficher les groupes
-            window.showToast("Distribution automatique des équipes effectuée.", "info");
-        });
-
-        document.getElementById('clear-elimination-groups')?.addEventListener('click', () => {
-            window.showModal('Confirmer l\'effacement', document.createTextNode('Êtes-vous sûr de vouloir effacer tous les groupes d\'élimination prévisualisés ?'), () => {
-                window.currentSecondaryGroupsPreview.groups = {};
-                window.saveAllData();
-                window.renderEliminationSelectionPage();
-                window.showToast("Groupes éliminatoires effacés.", "info");
-            }, true);
-        });
-
-        // Gérer le déplacement manuel des équipes entre groupes
-        document.querySelectorAll('.move-team-btn').forEach(button => {
-            button.addEventListener('click', (e) => {
-                const teamId = e.target.dataset.teamId;
-                const currentGroupId = e.target.dataset.currentGroupId;
-                window.showMoveTeamModal(teamId, currentGroupId);
-            });
-        });
-
-        document.getElementById('confirm-elimination-groups')?.addEventListener('click', async () => {
-            // Valider que tous les groupes sont remplis et qu'il n'y a pas de doublons
-            const groups = window.currentSecondaryGroupsPreview.groups;
-            const numGroups = parseInt(numGroupsInput.value, 10);
-            const teamsPerGroup = parseInt(teamsPerGroupInput.value, 10);
-
-            if (Object.keys(groups).length === 0) {
-                window.showToast("Veuillez générer ou ajouter des équipes aux groupes avant de confirmer.", "error");
-                return;
-            }
-
-            // Vérifier que tous les groupes ont le nombre d'équipes requis
-            let allGroupsValid = true;
-            for (const groupId in groups) {
-                const group = groups[groupId];
-                if (group.teams.length !== teamsPerGroup) {
-                    allGroupsValid = false;
-                    window.showToast(`Le groupe ${group.name} doit contenir exactement ${teamsPerGroup} équipes.`, "error");
+                if (nextRoundMatches.length === 1) { // If only one match left, it's the final. Stop.
                     break;
                 }
             }
 
-            if (!allGroupsValid) return;
-
-            // Vérifier que toutes les équipes dans les groupes sont uniques et proviennent bien de allTeams
-            const allTeamsInGroups = [];
-            for (const groupId in groups) {
-                groups[groupId].teams.forEach(team => allTeamsInGroups.push(team.id));
+            // Add Petite Finale (3rd place match)
+            const semiFinalRound = rounds.find(r => r.roundName === 'Demi-Finales');
+            if (semiFinalRound && semiFinalRound.matches.length === 2) {
+                const petiteFinaleMatch = {
+                    id: `elim_match_petite_finale_${groupType}`,
+                    roundName: 'Petite Finale', // Add roundName here for easier identification in propagateWinnerLoser
+                    team1: { id: null, name: 'À déterminer' }, // Use generic placeholder
+                    team2: { id: null, name: 'À déterminer' }, // Use generic placeholder
+                    score1: null,
+                    score2: null,
+                    winnerId: null,
+                    loserId: null,
+                    // These correctly store the IDs of the semi-final matches that will produce the losers
+                    prevMatch1LoserId: semiFinalRound.matches[0].id,
+                    prevMatch2LoserId: semiFinalRound.matches[1].id
+                };
+                rounds.push({ roundName: 'Petite Finale', matches: [petiteFinaleMatch] });
             }
-            if (new Set(allTeamsInGroups).size !== allTeamsInGroups.length) {
-                window.showToast("Des équipes sont dupliquées dans les groupes d'élimination.", "error");
+
+            return {
+                id: `elim_bracket_${groupType}`,
+                groupType: groupType,
+                timestamp: Date.now(),
+                bracket: rounds
+            };
+        }
+
+		function renderBracket(bracketData, containerElement) {
+            if (!bracketData || !bracketData.bracket || bracketData.bracket.length === 0) {
+                containerElement.innerHTML = `<p class="text-gray-500 text-center">Aucun tournoi à afficher pour le groupe ${escapeHtml(bracketData.groupType || '')}.</p>`;
                 return;
             }
-            // Vérifier que toutes les équipes qualifiées ont été utilisées
-            if (allTeamsInGroups.length !== teamsRanked.length) {
-                window.showToast("Toutes les équipes qualifiées doivent être assignées à un groupe.", "error");
-                return;
-            }
 
+            containerElement.innerHTML = `
+                <h3 class="2xl font-semibold text-gray-700 mb-4 text-center">Tournoi ${escapeHtml(bracketData.groupType)}</h3>
+                <div class="flex flex-col sm:flex-row justify-center gap-4 p-4 bg-white rounded-lg shadow-md overflow-x-auto">
+                    <!-- Rounds will be injected here -->
+                </div>
+                <div class="text-center mt-4">
+                    <button class="reset-group-btn bg-yellow-500 text-white py-1 px-3 rounded-md hover:bg-yellow-600 focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:ring-offset-2 shadow-sm text-sm" data-group-type="${escapeHtml(bracketData.groupType)}">
+                        Réinitialiser ce groupe
+                    </button>
+                </div>
+            `;
+            const bracketContainer = containerElement.querySelector('.flex.flex-col.sm\\:flex-row');
 
-            window.showModal('Confirmer la création des éliminatoires', document.createTextNode('Ceci va créer une nouvelle phase de brassage de type "élimination_seeding" avec ces groupes, et préparer les éliminatoires. Continuer ?'), async () => {
-                await window.validateSecondaryGroupsForElimination();
-            });
-        });
-    }
+            bracketData.bracket.forEach((round, roundIndex) => {
+                const roundDiv = document.createElement('div');
+                roundDiv.className = 'bracket-round flex flex-col items-center p-2 border border-gray-100 rounded-lg';
+                roundDiv.innerHTML = `<h4 class="font-bold text-lg text-gray-800 mb-4">${escapeHtml(round.roundName)}</h4>`;
 
-    /**
-     * Attache les écouteurs d'événements pour la page des éliminatoires.
-     */
-    function setupEliminatoiresPageLogic() {
-        document.querySelectorAll('.save-elim-scores-btn').forEach(button => {
-            button.addEventListener('click', async (e) => {
-                const roundId = e.target.dataset.roundId;
-                if (!roundId) {
-                    window.showToast("ID de tour non trouvé.", "error");
-                    return;
-                }
+                round.matches.forEach(match => {
+                    // DEBUT DE LA MODIFICATION
+                    const matchFrame = document.createElement('div');
+                    matchFrame.className = 'match-frame bg-gray-50 border border-gray-300 rounded-lg p-3 mb-4 shadow-sm w-full'; // Cadran pour le match
+                    matchFrame.dataset.matchId = match.id;
+                    // FIN DE LA MODIFICATION
 
-                const currentRound = window.eliminationPhases[roundId];
-                if (!currentRound) {
-                    window.showToast("Tour non trouvé pour la sauvegarde.", "error");
-                    return;
-                }
+                    let team1Name = escapeHtml(match.team1 ? match.team1.name : 'N/A');
+                    let team2Name = escapeHtml(match.team2 ? match.team2.name : 'N/A');
+                    let team1Class = 'team-name';
+                    let team2Class = 'team-name';
+                    let inputDisabled = false;
 
-                let allScoresEntered = true;
-                currentRound.matches.forEach(match => {
-                    // Trouver les inputs pour ce match spécifique
-                    const input1 = document.querySelector(`.elim-score-input[data-match-id="${match.id}"][data-team-id="${match.team1Id}"]`);
-                    const input2 = document.querySelector(`.elim-score-input[data-match-id="${match.id}"][data-team-id="${match.team2Id}"]`);
-
-                    const score1 = parseInt(input1?.value, 10);
-                    const score2 = parseInt(input2?.value, 10);
-
-                    if (isNaN(score1) || isNaN(score2)) {
-                        allScoresEntered = false;
-                        return;
+                    // Disable input if teams are placeholders (BYE, To be determined)
+                    if (!match.team1 || match.team1.id === null || match.team1.id === 'BYE' ||
+                        !match.team2 || match.team2.id === null || match.team2.id === 'BYE') {
+                        inputDisabled = true;
                     }
 
-                    match.score1 = score1;
-                    match.score2 = score2;
+                    // For BYE teams, ensure scores are 0 for display consistency
+                    if (match.team1 && match.team1.id === 'BYE') match.score1 = 0;
+                    if (match.team2 && match.team2.id === 'BYE') match.score2 = 0;
 
-                    if (score1 > score2) {
-                        match.winnerId = match.team1Id;
-                        match.loserId = match.team2Id;
-                    } else if (score2 > score1) {
-                        match.winnerId = match.team2Id;
-                        match.loserId = match.team1Id;
+                    if (match.winnerId) {
+                        if (match.winnerId === (match.team1 ? match.team1.id : null)) {
+                            team1Class += ' winner-team';
+                            team2Class += ' loser-team';
+                        } else if (match.winnerId === (match.team2 ? match.team2.id : null)) {
+                            team2Class += ' winner-team';
+                            team1Class += ' loser-team';
+                        }
+                    }
+
+                    // MODIFICATION: Insérer le contenu du match à l'intérieur du nouveau matchFrame
+                    matchFrame.innerHTML = `
+                        <div class="match-teams w-full text-center">
+                            <div class="${team1Class}">${team1Name}</div>
+                            <div class="flex items-center justify-center gap-2 mt-1">
+                                <select data-match-id="${match.id}" data-team="1" class="team-score-select score-input w-20 p-1 border border-gray-300 rounded-md text-center text-sm" ${inputDisabled ? 'disabled' : ''}>
+                                    ${generateScoreOptions(40, match.score1)}
+                                </select>
+                                <span class="font-bold text-gray-700">-</span>
+                                <select data-match-id="${match.id}" data-team="2" class="team-score-select score-input w-20 p-1 border border-gray-300 rounded-md text-center text-sm" ${inputDisabled ? 'disabled' : ''}>
+                                    ${generateScoreOptions(40, match.score2)}
+                                </select>
+                            </div>
+                            <div class="${team2Class}">${team2Name}</div>
+                        </div>
+                    `;
+                    // MODIFICATION: Ajouter le matchFrame (cadran) au lieu du matchBox (qui n'est plus utilisé comme parent direct)
+                    roundDiv.appendChild(matchFrame);
+                });
+                bracketContainer.appendChild(roundDiv);
+            });
+
+            // La sélection des écouteurs doit maintenant cibler les select à l'intérieur de .match-frame
+            containerElement.querySelectorAll('.match-frame .score-input').forEach(select => {
+                select.addEventListener('change', updateMatchScoreAndWinner);
+            });
+        }
+
+        function updateMatchScoreAndWinner(event) {
+            const matchId = event.target.dataset.matchId;
+            const teamNum = event.target.dataset.team;
+            let score = parseInt(event.target.value); // Value from select will be a string, parse to int
+            
+            // Allow empty string for clearing input (selected value from placeholder option)
+            if (isNaN(score)) {
+                score = null;
+            }
+
+            let targetBracket = null;
+            let targetMatch = null;
+
+            for (const groupType in eliminationPhases) {
+                const bracket = eliminationPhases[groupType];
+                for (const round of bracket.bracket) {
+                    for (const match of round.matches) {
+                        if (match.id === matchId) {
+                            targetBracket = bracket;
+                            targetMatch = match;
+                            break;
+                        }
+                    }
+                    if (targetMatch) break;
+                }
+                if (targetMatch) break;
+            }
+
+            if (!targetMatch) {
+                console.error(`Match with ID ${matchId} not found.`);
+                return;
+            }
+            
+            // Prevent score entry if teams are placeholders (BYE, To be determined)
+            if ((!targetMatch.team1 || targetMatch.team1.id === null || targetMatch.team1.id === 'BYE') ||
+                !targetMatch.team2 || targetMatch.team2.id === null || targetMatch.team2.id === 'BYE') {
+                showToast("Ce match est un BYE ou ses équipes ne sont pas encore déterminées. Les scores ne peuvent pas être saisis.", "error");
+                event.target.value = (teamNum === '1' ? targetMatch.score1 : targetMatch.score2) || ''; // Reset input to saved value or empty
+                return;
+            }
+
+
+            if (teamNum === '1') {
+                targetMatch.score1 = score;
+            } else {
+                targetMatch.score2 = score;
+            }
+
+            targetMatch.winnerId = null;
+            targetMatch.loserId = null;
+
+            if (targetMatch.score1 !== null && targetMatch.score2 !== null && targetMatch.score1 >= 0 && targetMatch.score2 >= 0) {
+                if (targetMatch.score1 > targetMatch.score2) {
+                    targetMatch.winnerId = targetMatch.team1.id;
+                    targetMatch.loserId = targetMatch.team2.id;
+                } else if (targetMatch.score2 > targetMatch.score1) {
+                    targetMatch.winnerId = targetMatch.team2.id;
+                    targetMatch.loserId = targetMatch.team1.id;
+                } else {
+                    showToast("Un match ne peut pas être un match nul. Veuillez entrer un vainqueur.", "error");
+                }
+            }
+
+            saveAllData();
+
+            // Visually update winner/loser classes
+            const matchElement = document.querySelector(`[data-match-id="${matchId}"]`);
+            if (matchElement) {
+                const team1NameSpan = matchElement.querySelector('.team-name:first-of-type');
+                const team2NameSpan = matchElement.querySelector('.team-name:last-of-type');
+
+                team1NameSpan.classList.remove('winner-team', 'loser-team');
+                team2NameSpan.classList.remove('winner-team', 'loser-team');
+
+                if (targetMatch.winnerId === (targetMatch.team1 ? targetMatch.team1.id : null)) {
+                    team1NameSpan.classList.add('winner-team');
+                    team2NameSpan.classList.add('loser-team');
+                } else if (targetMatch.winnerId === (targetMatch.team2 ? targetMatch.team2.id : null)) {
+                    team2NameSpan.classList.add('winner-team');
+                    team1NameSpan.classList.add('loser-team');
+                }
+            }
+
+            propagateWinnerLoser(targetMatch.id, targetMatch.winnerId, targetMatch.loserId, targetBracket);
+
+            // Re-render the specific bracket to update dynamic team names in next rounds
+            renderBracket(targetBracket, document.getElementById(targetBracket.groupType.toLowerCase() + 'Bracket'));
+
+            if (targetMatch.winnerId) {
+                showToast(`Score pour ${escapeHtml(targetMatch.team1.name)} vs ${escapeHtml(targetMatch.team2.name)} mis à jour et vainqueur déterminé !`, "success");
+            } else {
+                showToast("Saisie du score en cours...", "info");
+            }
+        }
+
+        function propagateWinnerLoser(sourceMatchId, winnerId, loserId, bracket) {
+            const sourceMatch = bracket.bracket.flatMap(r => r.matches).find(m => m.id === sourceMatchId);
+            if (!sourceMatch) return;
+
+            // Get the actual team objects based on IDs
+            const winningTeamObject = allTeams.find(t => t.id === winnerId) || { id: winnerId, name: 'À déterminer' };
+            const losingTeamObject = allTeams.find(t => t.id === loserId) || { id: loserId, name: 'À déterminer' };
+
+            bracket.bracket.forEach(round => {
+                round.matches.forEach(match => {
+                    // Standard propagation for winners to next round
+                    if (match.prevMatch1Id === sourceMatchId) {
+                        match.team1 = { ...winningTeamObject };
+                        // Clear scores if a new team is propagated into this slot (from placeholder or previous winner)
+                        // Only reset if both teams are now "real" and scores are already set or placeholder
+                        if (match.team1.id && match.team2?.id && match.team1.id !== 'À déterminer' && match.team2.id !== 'À déterminer' && match.team1.id !== 'BYE' && match.team2.id !== 'BYE') {
+                           if (match.score1 !== null || match.score2 !== null || match.winnerId !== null) { // if scores exist, reset them
+                                match.score1 = null;
+                                match.score2 = null;
+                                match.winnerId = null;
+                                match.loserId = null;
+                           }
+                        }
+                    }
+                    if (match.prevMatch2Id === sourceMatchId) {
+                        match.team2 = { ...winningTeamObject };
+                        // Clear scores if a new team is propagated into this slot
+                        if (match.team1.id && match.team2?.id && match.team1.id !== 'À déterminer' && match.team2.id !== 'À déterminer' && match.team1.id !== 'BYE' && match.team2.id !== 'BYE') {
+                           if (match.score1 !== null || match.score2 !== null || match.winnerId !== null) { // if scores exist, reset them
+                                match.score1 = null;
+                                match.score2 = null;
+                                match.winnerId = null;
+                                match.loserId = null;
+                           }
+                        }
+                    }
+
+                    // *** LOGIQUE CORRIGÉE POUR LA PETITE FINALE ***
+                    // Si le match actuel est la "Petite Finale"
+                    if (match.roundName === 'Petite Finale') {
+                        // Chercher les matchs de demi-finale correspondant aux prevMatchLoserId
+                        const semiFinalMatch1 = bracket.bracket.flatMap(r => r.matches).find(m => m.id === match.prevMatch1LoserId);
+                        const semiFinalMatch2 = bracket.bracket.flatMap(r => r.matches).find(m => m.id === match.prevMatch2LoserId);
+
+                        // Si le match source est la demi-finale 1 et qu'elle a un perdant
+                        if (sourceMatch.id === semiFinalMatch1?.id && semiFinalMatch1.loserId) {
+                            const actualLoserTeam = allTeams.find(t => t.id === semiFinalMatch1.loserId);
+                            if (actualLoserTeam) {
+                                match.team1 = { id: actualLoserTeam.id, name: actualLoserTeam.name };
+                                // Reset score if one team is updated to a real team from a placeholder
+                                if (match.team1.id && match.team2?.id && (match.score1 !== null || match.score2 !== null || match.winnerId !== null)) {
+                                    match.score1 = null;
+                                    match.score2 = null;
+                                    match.winnerId = null;
+                                    match.loserId = null;
+                                }
+                            }
+                        }
+                        // Si le match source est la demi-finale 2 et qu'elle a un perdant
+                        if (sourceMatch.id === semiFinalMatch2?.id && semiFinalMatch2.loserId) {
+                            const actualLoserTeam = allTeams.find(t => t.id === semiFinalMatch2.loserId);
+                            if (actualLoserTeam) {
+                                match.team2 = { id: actualLoserTeam.id, name: actualLoserTeam.name };
+                                // Reset score if one team is updated to a real team from a placeholder
+                                if (match.team1?.id && match.team2.id && (match.score1 !== null || match.score2 !== null || match.winnerId !== null)) {
+                                    match.score1 = null;
+                                    match.score2 = null;
+                                    match.winnerId = null;
+                                    match.loserId = null;
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+            saveAllData();
+        }
+
+        function generateAllEliminationPhases() {
+            eliminationBracketsDisplay.innerHTML = '';
+            showToast("Génération des tournois éliminatoires...", "info");
+
+            const groupedTeams = getTeamsGroupedBySecondaryPhase();
+            if (!groupedTeams) {
+                return;
+            }
+
+            eliminationPhases = {}; // Clear existing elimination phases for a fresh generation
+
+            const orderedGroupTypes = ["Principale", "Consolante", "Super Consolante"];
+
+            orderedGroupTypes.forEach(groupType => {
+                const teamsInGroup = groupedTeams[groupType];
+                if (teamsInGroup) { // Ensure the group exists
+                    const bracketData = generateBracketData(teamsInGroup, groupType);
+                    if (bracketData.bracket.length > 0) {
+                        eliminationPhases[groupType] = bracketData;
+
+                        const groupContainer = document.createElement('div');
+                        groupContainer.id = groupType.toLowerCase() + 'Bracket';
+                        groupContainer.className = 'bg-white p-4 rounded-lg shadow-xl';
+                        eliminationBracketsDisplay.appendChild(groupContainer);
+                        renderBracket(bracketData, groupContainer);
                     } else {
-                        match.winnerId = null; // Match nul ou à rejouer
-                        match.loserId = null;
+                        const messageDiv = document.createElement('div');
+                        messageDiv.className = 'bg-white p-4 rounded-lg shadow-md text-center text-gray-500';
+                        // Use bracketData.message if available, otherwise a generic message
+                        messageDiv.textContent = bracketData.message || `Pas assez d'équipes éligibles dans le groupe ${escapeHtml(groupType)} pour générer un tournoi à élimination.`;
+                        eliminationBracketsDisplay.appendChild(messageDiv);
                     }
-                });
-
-                if (!allScoresEntered) {
-                    window.showToast("Veuillez entrer tous les scores pour ce tour avant de sauvegarder.", "error");
-                    return;
+                } else { // Group doesn't exist in currentSecondaryGroupsPreview
+                     const messageDiv = document.createElement('div');
+                    messageDiv.className = 'bg-white p-4 rounded-lg shadow-md text-center text-gray-500';
+                    messageDiv.textContent = `Le groupe "${escapeHtml(groupType)}" n'est pas configuré.`;
+                    eliminationBracketsDisplay.appendChild(messageDiv);
                 }
-
-                // Mettre à jour les équipes éliminées
-                currentRound.matches.forEach(match => {
-                    if (match.loserId) {
-                        window.eliminatedTeams.add(match.loserId);
-                    }
-                    // Si un match est incomplet (winnerId null), l'équipe n'est pas éliminée pour l'instant
-                    // Si un match est rejoué et qu'il y avait un loserId, on doit le retirer si le match change
-                });
-
-                await window.saveAllData();
-                window.showToast("Scores des éliminatoires sauvegardés !", "success");
-                window.renderEliminatoiresPage(); // Re-render pour refléter les gagnants/perdants
             });
+
+            saveAllData();
+            showToast("Phases éliminatoires générées avec succès !", "success");
+        }
+
+        function resetAllEliminationPhases() {
+            const messageContent = document.createElement('p');
+            messageContent.textContent = "Êtes-vous sûr de vouloir réinitialiser TOUTES les phases éliminatoires ? Cette action est irréversible.";
+            messageContent.className = 'text-gray-700';
+
+            showModal('Confirmer la réinitialisation complète', messageContent, () => {
+                eliminationPhases = {};
+                saveAllData();
+                eliminationBracketsDisplay.innerHTML = '<p class="text-gray-500 text-center">Cliquez sur "Générer les Phases Éliminatoires" pour afficher les tournois.</p>';
+                showToast("Toutes les phases éliminatoires ont été réinitialisées.", "success");
+            }, true);
+        }
+
+        function resetGroupEliminationPhase(groupType) {
+            const messageContent = document.createElement('p');
+            messageContent.textContent = `Êtes-vous sûr de vouloir réinitialiser la phase éliminatoire pour le groupe "${escapeHtml(groupType)}" ? Cette action est irréversible.`;
+            messageContent.className = 'text-gray-700';
+
+            showModal(`Confirmer la réinitialisation du groupe ${escapeHtml(groupType)}`, messageContent, () => {
+                const groupedTeams = getTeamsGroupedBySecondaryPhase();
+                if (groupedTeams && groupedTeams[groupType]) { // Check if the group exists in groupedTeams
+                    // NOUVEAU: Filtrer les équipes éliminées
+                    const eligibleTeamsInGroup = groupedTeams[groupType].filter(team => !eliminatedTeams.has(team.id));
+
+                    if (eligibleTeamsInGroup.length >= 2) {
+                        const newBracketData = generateBracketData(eligibleTeamsInGroup, groupType);
+                        eliminationPhases[groupType] = newBracketData;
+                        saveAllData();
+                        renderBracket(newBracketData, document.getElementById(groupType.toLowerCase() + 'Bracket'));
+                        showToast(`Phase éliminatoire pour le groupe "${escapeHtml(groupType)}" réinitialisée.`, "success");
+                    } else {
+                        showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : pas assez d'équipes éligibles (${eligibleTeamsInGroup.length} restante(s)) ou données manquantes.`, "error");
+                        const groupContainer = document.getElementById(groupType.toLowerCase() + 'Bracket');
+                        if (groupContainer) {
+                             groupContainer.innerHTML = `<p class="text-gray-500 text-center">Aucun tournoi à afficher pour le groupe ${escapeHtml(groupType)}.</p>`;
+                        }
+                    }
+                } else {
+                     showToast(`Impossible de réinitialiser le groupe "${escapeHtml(groupType)}" : groupe non configuré.`, "error");
+                }
+            }, true);
+        }
+
+        // Initial rendering logic for the elimination page
+        if (Object.keys(eliminationPhases).length > 0) {
+            eliminationBracketsDisplay.innerHTML = '';
+            const orderedGroupTypes = ["Principale", "Consolante", "Super Consolante"];
+            orderedGroupTypes.forEach(groupType => {
+                const bracketData = eliminationPhases[groupType];
+                if (bracketData) {
+                    const groupContainer = document.createElement('div');
+                    groupContainer.id = groupType.toLowerCase() + 'Bracket';
+                    groupContainer.className = 'bg-white p-4 rounded-lg shadow-xl';
+                    eliminationBracketsDisplay.appendChild(groupContainer);
+                    renderBracket(bracketData, groupContainer);
+                } else {
+                     const messageDiv = document.createElement('div');
+                    messageDiv.className = 'bg-white p-4 rounded-lg shadow-md text-center text-gray-500';
+                    messageDiv.textContent = `Le groupe "${escapeHtml(groupType)}" n'a aucun tournoi enregistré.`;
+                    eliminationBracketsDisplay.appendChild(messageDiv);
+                }
+            });
+            showToast("Phases éliminatoires chargées depuis la sauvegarde.", "info");
+        } else {
+            eliminationBracketsDisplay.innerHTML = '<p class="text-gray-500 text-center">Cliquez sur "Générer les Phases Éliminatoires" pour afficher les tournois.</p>';
+        }
+
+        generateEliminationPhasesBtn.addEventListener('click', generateAllEliminationPhases);
+        resetAllEliminationPhasesBtn.addEventListener('click', resetAllEliminationPhases);
+        // NOUVEAU: Écouteur pour le bouton de sélection des équipes éliminées
+        goToEliminationSelectionBtn.addEventListener('click', () => {
+            window.location.hash = '#elimination-selection';
+        });
+
+        eliminationBracketsDisplay.addEventListener('click', (event) => {
+            if (event.target.classList.contains('reset-group-btn')) {
+                const groupType = event.target.dataset.groupType;
+                resetGroupEliminationPhase(groupType);
+            }
         });
     }
 
-    /**
-     * Attache les écouteurs d'événements pour la page des classements.
-     */
-    function setupClassementsPageLogic() {
-        // Pas d'écouteurs d'événements spécifiques nécessaires pour cette page simple d'affichage.
-        // Si des fonctionnalités interactives sont ajoutées à l'avenir (ex: tri, filtres), les écouteurs iront ici.
+    function renderClassementsPage() {
+        APP_CONTAINER.innerHTML = `
+            <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Classements du Tournoi</h1>
+
+            <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">Classement Général des Équipes</h2>
+                <p class="text-gray-600 mb-4">Ce classement est basé sur les points accumulés et la différence de score de toutes les phases de brassage (initiales et secondaires).</p>
+                
+                <div id="rankingsDisplay" class="overflow-x-auto rounded-lg shadow-sm border border-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tl-lg">Rang</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nom de l'équipe</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points Totaux</th>
+                                <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider rounded-tr-lg">Diff. Score Totale</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rankingsTableBody" class="bg-white divide-y divide-gray-200">
+                            <tr>
+                                <td colspan="4" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                                    Aucune donnée de classement disponible. Générez et complétez les phases de brassage.
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p id="rankingsMessage" class="mt-3 text-sm text-center text-gray-600"></p>
+            </section>
+
+            <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">Détails des Scores par Phase de Brassage</h2>
+                <div class="mb-4 flex items-center justify-start space-x-2">
+                    <input type="checkbox" id="togglePhaseDetails" class="form-checkbox h-4 w-4 text-blue-600">
+                    <label for="togglePhaseDetails" class="text-gray-700 text-sm">Afficher les détails par phase</label>
+                </div>
+                <div id="phaseDetailsDisplay" class="space-y-6">
+                    <p class="text-gray-500 text-center">Activez "Afficher les détails par phase" pour voir les scores par phase.</p>
+                </div>
+            </section>
+        `;
+        setupClassementsPageLogic();
     }
+
+    function setupClassementsPageLogic() {
+        const rankingsTableBody = document.getElementById('rankingsTableBody');
+        const rankingsMessage = document.getElementById('rankingsMessage');
+        const togglePhaseDetailsCheckbox = document.getElementById('togglePhaseDetails');
+        const phaseDetailsDisplay = document.getElementById('phaseDetailsDisplay');
+
+        function renderRankings() {
+            const globalRankings = getGlobalRankings(allTeams, allBrassagePhases);
+
+            if (globalRankings.length === 0) {
+                rankingsTableBody.innerHTML = `
+                    <tr>
+                        <td colspan="4" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                            Aucune donnée de classement disponible. Générez et complétez les phases de brassage.
+                        </td>
+                    </tr>
+                `;
+                rankingsMessage.textContent = "Aucune équipe classée pour le moment.";
+                return;
+            }
+
+            rankingsTableBody.innerHTML = globalRankings.map((rankEntry, index) => {
+                const teamName = escapeHtml(rankEntry.teamObject.name);
+                const isEliminated = eliminatedTeams.has(rankEntry.teamObject.id);
+                const teamClass = isEliminated ? 'line-through text-red-600' : 'text-gray-900';
+                const eliminatedText = isEliminated ? ' (Éliminée)' : '';
+
+                return `
+                    <tr>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${index + 1}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm ${teamClass}">${teamName}${eliminatedText}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${rankEntry.totalPoints}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${rankEntry.totalDiffScore}</td>
+                    </tr>
+                `;
+            }).join('');
+
+            rankingsMessage.textContent = `Classement général des ${globalRankings.length} équipes.`;
+
+            renderPhaseDetailsSection(globalRankings);
+        }
+
+        function renderPhaseDetailsSection(globalRankings) {
+            phaseDetailsDisplay.innerHTML = '';
+            if (!togglePhaseDetailsCheckbox.checked) {
+                phaseDetailsDisplay.innerHTML = '<p class="text-gray-500 text-center">Activez "Afficher les détails par phase" pour voir les scores par phase.</p>';
+                return;
+            }
+
+            const relevantPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE);
+
+            if (relevantPhases.length === 0) {
+                phaseDetailsDisplay.innerHTML = '<p class="text-gray-500 text-center">Aucune phase de brassage avec des détails à afficher.</p>';
+                return;
+            }
+
+            // Sort phases by timestamp to display chronologically
+            relevantPhases.sort((a, b) => a.timestamp - b.timestamp);
+
+            relevantPhases.forEach(phase => {
+                const phaseDiv = document.createElement('div');
+                phaseDiv.className = 'bg-white p-4 rounded-lg shadow-md border border-gray-200';
+                phaseDiv.innerHTML = `
+                    <h3 class="text-xl font-semibold text-gray-800 mb-3">${escapeHtml(phase.name)}</h3>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Équipe</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
+                                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Diff. Score</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <!-- Team details for this phase -->
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                const tbody = phaseDiv.querySelector('tbody');
+
+                // Filter teams that actually participated in this phase
+                const teamsInPhase = globalRankings.filter(rankEntry => rankEntry.detailsByPhase[phase.id]);
+
+                if (teamsInPhase.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="3" class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                                Aucune équipe n'a participé ou n'a de score dans cette phase.
+                            </td>
+                        </tr>
+                    `;
+                } else {
+                    // Sort teams within this phase by their performance in THIS phase
+                    teamsInPhase.sort((a, b) => {
+                        const statsA = a.detailsByPhase[phase.id] || { points: 0, diffScore: 0 };
+                        const statsB = b.detailsByPhase[phase.id] || { points: 0, diffScore: 0 };
+                        if (statsB.points !== statsA.points) return statsB.points - statsA.points;
+                        return statsB.diffScore - statsA.diffScore;
+                    });
+
+                    tbody.innerHTML = teamsInPhase.map(rankEntry => {
+                        const stats = rankEntry.detailsByPhase[phase.id] || { points: 0, diffScore: 0 };
+                        const teamName = escapeHtml(rankEntry.teamObject.name);
+                        return `
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${teamName}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stats.points}</td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stats.diffScore}</td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+                phaseDetailsDisplay.appendChild(phaseDiv);
+            });
+        }
+
+        togglePhaseDetailsCheckbox.addEventListener('change', renderPhaseDetailsSection.bind(null, getGlobalRankings(allTeams, allBrassagePhases)));
+
+        renderRankings(); // Initial render
+    }
+
+    /**
+     * Affiche le tableau de bord des tournois (créer/sélectionner).
+     */
+    function renderTournamentDashboard() {
+        APP_CONTAINER.innerHTML = `
+            <div class="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
+                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Mes Tournois</h1>
+
+                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Créer un Nouveau Tournoi</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                        <div>
+                            <label for="newTournamentName" class="block text-sm font-medium text-gray-700 mb-1">Nom du Tournoi</label>
+                            <input type="text" id="newTournamentName" placeholder="Nom du tournoi"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <div>
+                            <label for="newTournamentDate" class="block text-sm font-medium text-gray-700 mb-1">Date du Tournoi</label>
+                            <input type="date" id="newTournamentDate"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label for="newTournamentNumTeams" class="block text-sm font-medium text-gray-700 mb-1">Nombre d'équipes prévues</label>
+                            <input type="number" id="newTournamentNumTeams" min="2" value="10" placeholder="Nombre d'équipes"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <div class="md:col-span-2">
+                            <button id="createTournamentBtn"
+                                    class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                                Créer le Tournoi
+                            </button>
+                        </div>
+                    </div>
+                    <p id="createTournamentMessage" class="mt-3 text-sm text-center"></p>
+                </section>
+
+                <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Sélectionner un Tournoi Existant</h2>
+                    <div id="tournamentsList" class="space-y-4">
+                        <p class="text-gray-500 text-center">Aucun tournoi disponible. Créez-en un nouveau !</p>
+                    </div>
+                </section>
+            </div>
+        `;
+        setupTournamentDashboardLogic();
+    }
+
+    /**
+     * Logique du tableau de bord des tournois.
+     */
+    function setupTournamentDashboardLogic() {
+        const newTournamentNameInput = document.getElementById('newTournamentName');
+        const newTournamentDateInput = document.getElementById('newTournamentDate');
+        const newTournamentNumTeamsInput = document.getElementById('newTournamentNumTeams');
+        const createTournamentBtn = document.getElementById('createTournamentBtn');
+        const createTournamentMessage = document.getElementById('createTournamentMessage');
+        const tournamentsListDiv = document.getElementById('tournamentsList');
+
+        createTournamentBtn.addEventListener('click', () => {
+            const name = newTournamentNameInput.value.trim();
+            const date = newTournamentDateInput.value;
+            const numTeams = parseInt(newTournamentNumTeamsInput.value);
+            createNewTournament(name, date, numTeams);
+        });
+
+        function renderTournamentsList() {
+            tournamentsListDiv.innerHTML = '';
+            if (allUserTournaments.length === 0) {
+                tournamentsListDiv.innerHTML = '<p class="text-gray-500 text-center">Aucun tournoi disponible. Créez-en un nouveau !</p>';
+                return;
+            }
+
+            allUserTournaments.forEach(tournament => {
+                const isOwner = tournament.ownerId === window.userId;
+                const isSelected = currentTournamentId === tournament.id;
+                const tourneyDiv = document.createElement('div');
+                tourneyDiv.className = `flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 bg-white border rounded-md shadow-sm ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'}`;
+                
+                let collaboratorEmailsHtml = '';
+                if (tournament.collaboratorEmails && tournament.collaboratorEmails.length > 0) {
+                    collaboratorEmailsHtml = `<p class="text-xs text-gray-600 mt-1">Collaborateurs: ${tournament.collaboratorEmails.map(email => escapeHtml(email)).join(', ')}</p>`;
+                }
+
+                tourneyDiv.innerHTML = `
+                    <div class="flex-grow">
+                        <p class="text-lg font-medium text-gray-800">${escapeHtml(tournament.name)} ${isSelected ? '<span class="text-blue-600 text-sm ml-2">(Actif)</span>' : ''}</p>
+                        <p class="text-sm text-gray-600">Date: ${escapeHtml(tournament.date)} | Équipes prévues: ${escapeHtml(tournament.numTeamsAllowed.toString())}</p>
+                        <p class="text-sm text-gray-600">Propriétaire: ${isOwner ? 'Moi' : (tournament.ownerEmail ? escapeHtml(tournament.ownerEmail) : 'Inconnu')}</p>
+                        ${collaboratorEmailsHtml}
+                    </div>
+                    <div class="flex space-x-2 mt-3 sm:mt-0">
+                        <button data-id="${tournament.id}" class="select-tournament-btn bg-blue-500 text-white px-3 py-1 rounded-md hover:bg-blue-600 text-sm transition duration-150 ${isSelected ? 'opacity-50 cursor-not-allowed' : ''}" ${isSelected ? 'disabled' : ''}>
+                            Sélectionner
+                        </button>
+                        ${isOwner ? `<button data-id="${tournament.id}" class="delete-tournament-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition duration-150">
+                            Supprimer
+                        </button>` : ''}
+                    </div>
+                `;
+                tournamentsListDiv.appendChild(tourneyDiv);
+            });
+
+            document.querySelectorAll('.select-tournament-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    selectTournament(event.target.dataset.id);
+                });
+            });
+
+            document.querySelectorAll('.delete-tournament-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    deleteTournament(event.target.dataset.id);
+                });
+            });
+        }
+
+        // Listen for changes in allUserTournaments and re-render
+        // This is handled by loadAllData which fetches the list on auth state change
+        // and then calls handleLocationHash which calls renderTournamentDashboard.
+        // So, renderTournamentsList is called when the page is rendered.
+        renderTournamentsList();
+    }
+
+    /**
+     * Affiche la page de gestion des collaborateurs.
+     */
+    function renderCollaboratorsPage() {
+        if (!currentTournamentData || currentTournamentData.ownerId !== window.userId) {
+            APP_CONTAINER.innerHTML = `
+                <div class="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10 text-center">
+                    <h1 class="text-2xl font-bold text-gray-800 mb-4">Accès Refusé</h1>
+                    <p class="text-gray-700">Vous devez être le propriétaire du tournoi pour gérer les collaborateurs.</p>
+                    <button onclick="window.location.hash='#home'" class="mt-4 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">Retour à l'accueil</button>
+                </div>
+            `;
+            return;
+        }
+
+        APP_CONTAINER.innerHTML = `
+            <div class="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
+                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Gérer les Collaborateurs du Tournoi</h1>
+                <p class="text-center text-gray-600 mb-6">
+                    Tournoi actuel : <span class="font-semibold">${escapeHtml(currentTournamentData.name)}</span>
+                </p>
+
+                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter un Collaborateur par UID</h2>
+                    <p class="text-gray-600 mb-4">
+                        Pour ajouter un collaborateur avec un accès réel au tournoi (selon les règles de sécurité Firestore),
+                        vous devez connaître son UID Firebase.
+                    </p>
+                    <div class="flex flex-col sm:flex-row gap-4 items-end">
+                        <div class="flex-grow">
+                            <label for="collaboratorUidInput" class="block text-sm font-medium text-gray-700 mb-1">UID du Collaborateur</label>
+                            <input type="text" id="collaboratorUidInput" placeholder="Entrez l'UID Firebase du collaborateur"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <button id="addCollaboratorUidBtn"
+                                class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                            Ajouter par UID
+                        </button>
+                    </div>
+                </section>
+
+                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter un Collaborateur par Email (pour affichage)</h2>
+                    <p class="text-gray-600 mb-4">
+                        Vous pouvez ajouter des adresses e-mail pour suivre les collaborateurs, mais cela ne leur donne
+                        **pas d'accès automatique** au tournoi via les règles de sécurité Firestore. Pour un accès réel,
+                        une fonction Cloud Firebase est nécessaire pour convertir l'email en UID et mettre à jour les règles.
+                    </p>
+                    <div class="flex flex-col sm:flex-row gap-4 items-end">
+                        <div class="flex-grow">
+                            <label for="collaboratorEmailInput" class="block text-sm font-medium text-gray-700 mb-1">Email du Collaborateur</label>
+                            <input type="email" id="collaboratorEmailInput" placeholder="collaborateur@example.com"
+                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+                        </div>
+                        <button id="addCollaboratorEmailBtn"
+                                class="bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                            Ajouter par Email
+                        </button>
+                    </div>
+                </section>
+
+                <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Collaborateurs Actuels</h2>
+                    <div id="currentCollaboratorsList" class="space-y-3">
+                        <p class="text-gray-500 text-center">Aucun collaborateur pour ce tournoi.</p>
+                    </div>
+                </section>
+            </div>
+        `;
+        setupCollaboratorsPageLogic();
+    }
+
+    /**
+     * Logique de la page de gestion des collaborateurs.
+     */
+    function setupCollaboratorsPageLogic() {
+        const collaboratorUidInput = document.getElementById('collaboratorUidInput');
+        const addCollaboratorUidBtn = document.getElementById('addCollaboratorUidBtn');
+        const collaboratorEmailInput = document.getElementById('collaboratorEmailInput');
+        const addCollaboratorEmailBtn = document.getElementById('addCollaboratorEmailBtn');
+        const currentCollaboratorsList = document.getElementById('currentCollaboratorsList');
+
+        function renderCollaborators() {
+            currentCollaboratorsList.innerHTML = '';
+            const collaborators = [];
+
+            // Add owner
+            if (currentTournamentData && currentTournamentData.ownerId) {
+                collaborators.push({
+                    type: 'owner',
+                    id: currentTournamentData.ownerId,
+                    display: `${window.auth.currentUser.email} (Moi - Propriétaire)`
+                });
+            }
+
+            // Add collaborators by UID
+            if (currentTournamentData && currentTournamentData.collaboratorIds) {
+                currentTournamentData.collaboratorIds.forEach(uid => {
+                    if (uid !== window.userId && uid !== currentTournamentData.ownerId) { // Exclure le propriétaire et l'utilisateur actuel s'il est déjà propriétaire
+                        collaborators.push({
+                            type: 'uid',
+                            id: uid,
+                            display: `UID: ${escapeHtml(uid)} (Accès réel)`
+                        });
+                    }
+                });
+            }
+
+            // Add collaborators by email (for display only)
+            if (currentTournamentData && currentTournamentData.collaboratorEmails) {
+                currentTournamentData.collaboratorEmails.forEach(email => {
+                    // Avoid duplicating if email corresponds to current user (owner)
+                    if (email !== window.auth.currentUser.email) {
+                        collaborators.push({
+                            type: 'email',
+                            id: email, // Use email as ID for display purposes
+                            display: `Email: ${escapeHtml(email)} (Pour info)`
+                        });
+                    }
+                });
+            }
+
+            if (collaborators.length === 0) {
+                currentCollaboratorsList.innerHTML = '<p class="text-gray-500 text-center">Aucun collaborateur pour ce tournoi.</p>';
+                return;
+            }
+
+            collaborators.forEach(collab => {
+                const collabDiv = document.createElement('div');
+                collabDiv.className = 'flex items-center justify-between p-3 bg-white border border-gray-200 rounded-md shadow-sm';
+                collabDiv.innerHTML = `
+                    <span class="text-gray-800 font-medium flex-grow">${collab.display}</span>
+                    <div class="flex space-x-2 ml-4">
+                        ${collab.type !== 'owner' ? `
+                            <button data-id="${collab.id}" data-type="${collab.type}" class="remove-collaborator-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition duration-150">
+                                Supprimer
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
+                currentCollaboratorsList.appendChild(collabDiv);
+            });
+
+            document.querySelectorAll('.remove-collaborator-btn').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    const collabId = event.target.dataset.id;
+                    const collabType = event.target.dataset.type;
+                    const messageContent = document.createElement('p');
+                    messageContent.textContent = `Êtes-vous sûr de vouloir supprimer ce collaborateur (${escapeHtml(collabId)}) ?`;
+                    messageContent.className = 'text-gray-700';
+
+                    showModal('Confirmer la suppression du collaborateur', messageContent, () => {
+                        if (collabType === 'uid') {
+                            removeCollaboratorByUid(currentTournamentId, collabId);
+                        } else if (collabType === 'email') {
+                            removeCollaboratorByEmailForDisplay(currentTournamentId, collabId);
+                        }
+                    }, true);
+                });
+            });
+        }
+
+        addCollaboratorUidBtn.addEventListener('click', () => {
+            const uid = collaboratorUidInput.value.trim();
+            addCollaboratorByUid(currentTournamentId, uid);
+            collaboratorUidInput.value = '';
+        });
+
+        addCollaboratorEmailBtn.addEventListener('click', () => {
+            const email = collaboratorEmailInput.value.trim();
+            addCollaboratorByEmailForDisplay(currentTournamentId, email);
+            collaboratorEmailInput.value = '';
+        });
+
+        // Initial render and re-render on tournament data change
+        // This is handled by the onSnapshot listener for currentTournamentData
+        renderCollaborators();
+    }
+
+
+    // --- Routage et Initialisation ---
+
+    /**
+     * Gère les changements de hash dans l'URL pour la navigation.
+     */
+    function handleLocationHash() {
+        const path = window.location.hash.substring(1); // Supprime le '#' initial
+        console.log("Navigating to:", path);
+
+        // Mettre à jour la visibilité des liens de navigation en premier
+        updateNavLinksVisibility();
+        updateTournamentDisplay(); // S'assurer que le nom du tournoi est à jour
+
+        // Mise à jour de la classe "active" de la navigation
+        document.querySelectorAll('.nav-link').forEach(link => {
+            const linkPath = link.getAttribute('href').substring(1);
+            if (linkPath === path) {
+                link.classList.add('border-b-2', 'border-blue-200');
+            } else {
+                link.classList.remove('border-b-2', 'border-blue-200');
+            }
+        });
+
+        // Rediriger si l'utilisateur n'est pas connecté ou n'a pas de tournoi sélectionné
+        if (!window.userId) {
+            if (path !== 'auth') {
+                window.location.hash = '#auth';
+            }
+            renderAuthPage();
+            return;
+        }
+
+        if (!currentTournamentId && path !== 'tournaments') {
+            window.location.hash = '#tournaments'; // Rediriger vers le tableau de bord des tournois
+            renderTournamentDashboard();
+            return;
+        }
+
+        // Si un tournoi est sélectionné, et l'utilisateur est propriétaire, vérifier l'accès à la page des collaborateurs
+        if (path === 'collaborators' && currentTournamentData?.ownerId !== window.userId) {
+            showToast("Vous n'êtes pas le propriétaire de ce tournoi pour gérer les collaborateurs.", "error");
+            window.location.hash = '#home'; // Rediriger vers l'accueil
+            renderHomePage();
+            return;
+        }
+
+
+        switch (path) {
+            case 'home':
+                renderHomePage();
+                break;
+            case 'equipes':
+                renderEquipesPage();
+                break;
+            case 'brassages':
+                renderBrassagesPage();
+                break;
+            case 'eliminatoires':
+                renderEliminatoiresPage();
+                break;
+            case 'classements':
+                renderClassementsPage();
+                break;
+            case 'elimination-selection':
+                renderEliminationSelectionPage();
+                break;
+            case 'tournaments': // Nouvelle route pour le tableau de bord des tournois
+                renderTournamentDashboard();
+                break;
+            case 'collaborators': // Nouvelle route pour la gestion des collaborateurs
+                renderCollaboratorsPage();
+                break;
+            case 'auth': // Si déjà connecté, rediriger vers le tableau de bord des tournois
+                window.location.hash = '#tournaments';
+                renderTournamentDashboard();
+                break;
+            default:
+                // Si la route est inconnue ou vide, rediriger vers le tableau de bord des tournois
+                console.warn(`Route inconnue: ${path}. Redirection vers le tableau de bord des tournois.`);
+                window.location.hash = '#tournaments';
+                renderTournamentDashboard();
+        }
+    }
+
+    // --- Initialisation de l'Application ---
+    document.addEventListener('DOMContentLoaded', () => {
+        // Attacher les gestionnaires d'événements pour les boutons de la modale globale
+        if (modalCancelBtn) {
+            modalCancelBtn.addEventListener('click', hideModal);
+        } else {
+            console.error("modalCancelBtn non trouvé au chargement du DOM.");
+        }
+        // Le modalConfirmBtn est géré dynamiquement dans showModal()
+
+        // Ajout de la transparence à la barre de navigation lors du défilement
+        const navBar = document.querySelector('nav');
+        if (navBar) { // Vérifier si la navBar existe
+            let isScrolled = false;
+            window.addEventListener('scroll', () => {
+                if (window.scrollY > 0) {
+                    if (!isScrolled) {
+                        navBar.classList.add('bg-blue-700/70', 'transition-colors', 'duration-300'); // Plus transparent
+                        navBar.classList.remove('bg-blue-700/90');
+                        isScrolled = true;
+                    }
+                } else {
+                    if (isScrolled) {
+                        navBar.classList.remove('bg-blue-700/70');
+                        navBar.classList.add('bg-blue-700/90'); // Moins transparent
+                        isScrolled = false;
+                    }
+                }
+            });
+        } else {
+            console.warn("Barre de navigation (nav) non trouvée.");
+        }
+
+        // Fonction de rappel appelée par index.html une fois Firebase initialisé et l'état d'authentification connu
+        window.onFirebaseReady = () => {
+            console.log("Firebase est prêt. Chargement des données et gestion du routage.");
+            if (window.userId) {
+                // Si l'utilisateur est connecté, tenter de charger ses données de tournoi
+                loadAllData(); // Cette fonction gérera la sélection du tournoi actif et le chargement des données
+            } else {
+                // Si non connecté, rediriger vers la page d'authentification
+                handleLocationHash(); // Cela appellera renderAuthPage
+            }
+        };
+
+        // Écouter les changements de hash dans l'URL pour le routage
+        window.addEventListener('hashchange', handleLocationHash);
+
+        // Gestionnaire pour le bouton de déconnexion
+        logoutBtn.addEventListener('click', async () => {
+            try {
+                await window.signOut(window.auth);
+                showToast("Déconnexion réussie !", "info");
+                // Réinitialiser les variables globales du tournoi
+                currentTournamentId = null;
+                currentTournamentData = null;
+                allTeams = [];
+                allBrassagePhases = [];
+                eliminationPhases = {};
+                currentSecondaryGroupsPreview = {};
+                eliminatedTeams = new Set();
+                currentDisplayedPhaseId = null;
+                allUserTournaments = [];
+                if (window.currentTournamentUnsubscribe) {
+                    window.currentTournamentUnsubscribe(); // Détacher le listener du tournoi
+                    window.currentTournamentUnsubscribe = null;
+                }
+                handleLocationHash(); // Rediriger vers la page d'authentification
+            } catch (error) {
+                console.error("Erreur de déconnexion:", error);
+                showToast("Erreur lors de la déconnexion.", "error");
+            }
+        });
+
+        // Gestionnaire pour le bouton "Changer de tournoi"
+        selectTournamentBtn.addEventListener('click', () => {
+            window.location.hash = '#tournaments';
+        });
+    });
+
 })();
