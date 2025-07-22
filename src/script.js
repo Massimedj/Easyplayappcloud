@@ -1,4 +1,21 @@
-logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
+// --- Importations Firebase ---
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js";
+import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, getDocs, updateDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
+
+// --- Configuration et Initialisation de Firebase ---
+const firebaseConfig = {
+    apiKey: "AIzaSyA1AoHpUpvD12YUzLe91SWNpxmPRPB36aQ",
+    authDomain: "easyplayapp-97e15.firebaseapp.com",
+    projectId: "easyplayapp-97e15",
+    storageBucket: "easyplayapp-97e15.firebasestorage.app",
+    messagingSenderId: "741324257784",
+    appId: "1:741324257784:web:06a85e1f10b8dc804afe0d",
+};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
 
 (function() {
     // --- Constantes et Variables Globales ---
@@ -26,6 +43,8 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
     let currentSecondaryGroupsPreview = {};
     let eliminatedTeams = new Set();
     let poolGenerationBasis = 'initialLevels'; // Default value, will be loaded or set
+	let currentUserPrivateDataUnsubscribe = null;
+	let currentTournamentUnsubscribe = null;
 
     let currentDisplayedPhaseId = null; // ID de la phase de brassage actuellement affichée
 
@@ -41,7 +60,7 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
 
     // Variable pour le mode invité
     const GUEST_MODE_MAX_TEAMS = 9;
-    let isGuestMode = false;
+    let isGuestMode = true;
 
 
     // --- Cache des éléments DOM de la modale ---
@@ -252,10 +271,11 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
      * @returns {import("https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js").DocumentReference|null} La référence du document ou null si Firebase n'est pas prêt.
      */
     function getUserPrivateDataRef() {
-        if (window.db && window.userId && window.appId) {
-            return window.doc(window.db, 'artifacts', window.appId, 'users', window.userId, 'privateData', 'activeTournament');
+        if (window.db && window.userId) {
+            // CORRECTION : Le chemin pointe maintenant vers la collection "users_private",
+            // conformément à vos règles de sécurité Firestore.
+            return window.doc(window.db, 'users_private', window.userId);
         }
-        // console.error("Firebase, User ID ou App ID non initialisé pour les données privées."); // Trop verbeux
         return null;
     }
 
@@ -277,107 +297,81 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
      * Cette fonction est appelée chaque fois que des données sont modifiées.
      */
     async function saveAllData() {
-        if (isGuestMode) {
-            saveDataToLocalStorage();
-            showToast("Données sauvegardées localement.", "success");
-            // Après sauvegarde locale, re-rendre la page pour refléter les changements
-            handleLocationHash(); // C'est handleLocationHash qui s'occupe de re-rendre la bonne page
-            return;
-        }
-
-        if (!window.userId) {
-            showToast("Vous devez être connecté pour sauvegarder les données.", "error");
-            return;
-        }
-        if (!currentTournamentId) {
-            showToast("Aucun tournoi sélectionné. Veuillez créer ou sélectionner un tournoi d'abord.", "error");
-            return;
-        }
-
-        const tournamentDocRef = getTournamentDataRef(currentTournamentId);
-        if (!tournamentDocRef) {
-            showToast("Erreur: Impossible de sauvegarder les données, référence au tournoi non valide.", "error");
-            return;
-        }
-
-        try {
-            const dataToSave = {
-                // Métadonnées du tournoi (ne pas écraser si déjà définies, sauf si l'on veut les rendre éditables)
-                // Pour l'instant, on les reprend de currentTournamentData pour s'assurer qu'elles sont là.
-                name: currentTournamentData.name,
-                date: currentTournamentData.date,
-                numTeamsAllowed: currentTournamentData.numTeamsAllowed,
-                ownerId: currentTournamentData.ownerId,
-                collaboratorIds: currentTournamentData.collaboratorIds || [], // Assurez-vous que c'est un tableau
-                collaboratorEmails: currentTournamentData.collaboratorEmails || [], // Assurez-vous que c'est un tableau
-                poolGenerationBasis: poolGenerationBasis, // Save the basis for logged-in users
-
-                // Données spécifiques au tournoi
-                allTeams: allTeams,
-                allBrassagePhases: allBrassagePhases,
-                eliminationPhases: eliminationPhases,
-                currentSecondaryGroupsPreview: currentSecondaryGroupsPreview,
-                eliminatedTeams: Array.from(eliminatedTeams), // Convertir le Set en Array
-                currentDisplayedPhaseId: currentDisplayedPhaseId
-            };
-            await window.setDoc(tournamentDocRef, dataToSave);
-            console.log("Données du tournoi sauvegardées avec succès dans Firestore:", currentTournamentId);
-            // showToast("Données sauvegardées.", "success"); // Peut être trop fréquent, géré par onSnapshot
-        } catch (e) {
-            console.error("Erreur lors de la sauvegarde des données du tournoi dans Firestore:", e);
-            showToast("Erreur lors de la sauvegarde des données du tournoi.", "error");
-        }
+    if (isGuestMode) {
+        saveDataToLocalStorage();
+        showToast("Données sauvegardées localement.", "success");
+        handleLocationHash();
+        return;
     }
+    if (!window.userId || !currentTournamentId) return;
+    const tournamentDocRef = getTournamentDataRef(currentTournamentId);
+    if (!tournamentDocRef) return;
+    try {
+        const dataToSave = {
+            name: currentTournamentData.name,
+            date: currentTournamentData.date,
+            numTeamsAllowed: currentTournamentData.numTeamsAllowed,
+            ownerId: currentTournamentData.ownerId,
+            poolGenerationBasis: poolGenerationBasis,
+            allTeams: allTeams,
+            allBrassagePhases: allBrassagePhases,
+            eliminationPhases: eliminationPhases,
+            currentSecondaryGroupsPreview: currentSecondaryGroupsPreview,
+            eliminatedTeams: Array.from(eliminatedTeams),
+            currentDisplayedPhaseId: currentDisplayedPhaseId
+        };
+        await window.setDoc(tournamentDocRef, dataToSave);
+    } catch (e) {
+        console.error("Erreur lors de la sauvegarde des données du tournoi dans Firestore:", e);
+        showToast("Erreur lors de la sauvegarde des données du tournoi.", "error");
+    }
+}
 
     /**
      * Charge toutes les données du tournoi actif depuis Firestore.
      * Met également en place un listener en temps réel.
      */
-    async function loadAllData() {
+	async function loadAllData() {
+        // La fonction de nettoyage est maintenant appelée par onAuthStateChanged dans index.html AVANT ce code.
+        
         if (!window.userId) {
             console.log("Utilisateur non connecté. Tentative de chargement des données en mode invité.");
             isGuestMode = true;
             loadDataFromLocalStorage();
-            handleLocationHash(); // Va afficher la page d'accueil ou inviter à se connecter si trop d'équipes
+            handleLocationHash(); // Va afficher la page d'accueil
             return;
         }
 
-        isGuestMode = false; // Ensure guest mode is off if a user is logged in
-        currentTournamentId = null; // Reset to ensure fresh load
-        currentTournamentData = null; // Reset to ensure fresh load
-
+        isGuestMode = false;
         const userPrivateDataRef = getUserPrivateDataRef();
         if (!userPrivateDataRef) {
             showToast("Erreur: Impossible de charger les données utilisateur, Firebase non prêt.", "error");
             return;
         }
 
-        // Détacher l'ancien listener des données privées de l'utilisateur si existant avant d'en créer un nouveau
-        if (window.currentUserPrivateDataUnsubscribe) {
-            window.currentUserPrivateDataUnsubscribe();
-            console.log("Ancien listener des données privées de l'utilisateur détaché (lors d'un nouveau loadAllData).");
-        }
-
-        // Étape 1: Charger l'ID du tournoi actif de l'utilisateur
-        // Stocker la fonction de désabonnement dans une variable globale
-        window.currentUserPrivateDataUnsubscribe = window.onSnapshot(userPrivateDataRef, async (docSnap) => { // MODIFIÉ
+        // CORRECTION : On assigne la fonction de désinscription à notre variable globale
+        currentUserPrivateDataUnsubscribe = window.onSnapshot(userPrivateDataRef, async (docSnap) => {
             if (docSnap.exists() && docSnap.data().activeTournamentId) {
-                // ... (reste du code inchangé dans ce bloc) ...
+                const activeTournamentIdFromUser = docSnap.data().activeTournamentId;
+                if (currentTournamentId !== activeTournamentIdFromUser) {
+                    await fetchAndListenToTournamentData(activeTournamentIdFromUser);
+                }
             } else {
-                // ... (reste du code inchangé dans ce bloc) ...
+                currentTournamentId = null;
+                currentTournamentData = null;
+                allTeams = [];
+                allBrassagePhases = [];
+                eliminationPhases = {};
+                updateTournamentDisplay();
+                updateNavLinksVisibility();
+                handleLocationHash();
             }
         }, (error) => {
-            // Cette erreur est toujours possible si le réseau coupe brutalement, etc.
-            // Mais l'erreur de permission lors de la déconnexion devrait être atténuée.
             console.error("Erreur lors de l'écoute des données privées de l'utilisateur:", error);
-            // On pourrait choisir de ne pas montrer de toast ici car c'est souvent un comportement attendu à la déconnexion
-            // showToast("Erreur de synchronisation des données utilisateur.", "error");
         });
 
-        // Étape 2: Charger la liste de TOUS les tournois de l'utilisateur (pour le tableau de bord)
         await fetchUserTournamentsList();
     }
-
     /**
      * Sauvegarde les données du tournoi dans le localStorage pour le mode invité.
      */
@@ -468,74 +462,40 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
         updateNavLinksVisibility();
     }
 
-    /**
-     * Récupère et met en place un listener pour les données d'un tournoi spécifique.
+	/**
+     * Récupère et met en place un listener en temps réel pour les données d'un tournoi spécifique.
      * @param {string} tournamentId L'ID du tournoi à charger.
      */
-    async function fetchAndListenToTournamentData(tournamentId) {
-        if (!tournamentId) {
-            console.warn("Tentative de charger un tournoi avec un ID vide.");
-            return;
-        }
-        if (isGuestMode) { // Should not be called in guest mode
-            console.warn("fetchAndListenToTournamentData called in guest mode, this is unexpected.");
-            return;
-        }
+	async function fetchAndListenToTournamentData(tournamentId) {
+        if (!tournamentId) return;
+        if (currentTournamentUnsubscribe) currentTournamentUnsubscribe(); // Nettoie l'écouteur précédent
 
         const tournamentDocRef = getTournamentDataRef(tournamentId);
-        if (!tournamentDocRef) {
-            showToast("Erreur: Impossible de charger le tournoi, référence non valide.", "error");
-            return;
-        }
+        currentTournamentId = tournamentId;
 
-        // Détacher l'ancien listener si existant
-        if (window.currentTournamentUnsubscribe) {
-            window.currentTournamentUnsubscribe();
-            console.log("Ancien listener de tournoi détaché.");
-        }
-
-        // Mettre en place un nouveau listener pour le tournoi sélectionné
-        window.currentTournamentUnsubscribe = window.onSnapshot(tournamentDocRef, (docSnap) => {
+        // CORRECTION : On assigne la nouvelle fonction de désinscription
+        currentTournamentUnsubscribe = window.onSnapshot(tournamentDocRef, (docSnap) => {
             if (docSnap.exists()) {
-                const data = docSnap.data();
-                currentTournamentData = data; // Stocker les métadonnées du tournoi
-                allTeams = data.allTeams || [];
-                allBrassagePhases = data.allBrassagePhases || [];
-                eliminationPhases = data.eliminationPhases || {};
-                currentSecondaryGroupsPreview = data.currentSecondaryGroupsPreview || {};
-                eliminatedTeams = new Set(data.eliminatedTeams || []);
-                currentDisplayedPhaseId = data.currentDisplayedPhaseId || null;
-                poolGenerationBasis = data.poolGenerationBasis || 'initialLevels'; // Load basis for logged-in users
-
-                console.log("Données du tournoi chargées/mises à jour:", tournamentId);
+                currentTournamentData = docSnap.data();
+                allTeams = currentTournamentData.allTeams || [];
+                allBrassagePhases = currentTournamentData.allBrassagePhases || [];
+                eliminationPhases = currentTournamentData.eliminationPhases || {};
+                currentSecondaryGroupsPreview = currentTournamentData.currentSecondaryGroupsPreview || {};
+                eliminatedTeams = new Set(currentTournamentData.eliminatedTeams || []);
+                currentDisplayedPhaseId = currentTournamentData.currentDisplayedPhaseId || null;
+                poolGenerationBasis = currentTournamentData.poolGenerationBasis || 'initialLevels';
+                
                 rebuildMatchOccurrenceMap();
-                updateTournamentDisplay(); // Mettre à jour l'UI avec le nom du tournoi
-                // updatePoolGenerationBasisUI(); // Cet appel est supprimé ici, il sera appelé par setupBrassagesPageLogic
-                handleLocationHash(); // Rendre la page actuelle (ou rediriger si nécessaire)
+                updateTournamentDisplay();
+                updateNavLinksVisibility();
+                handleLocationHash();
             } else {
-                console.warn(`Le tournoi ${tournamentId} n'existe plus ou l'accès est refusé.`);
-                showToast(`Le tournoi "${tournamentId}" n'existe plus ou l'accès est refusé.`, "error");
-                // Si le tournoi n'existe plus, on le désélectionne
-                currentTournamentId = null;
-                currentTournamentData = null;
-                allTeams = []; // Clear local data
-                allBrassagePhases = [];
-                eliminationPhases = {};
-                currentSecondaryGroupsPreview = {};
-                eliminatedTeams = new Set();
-                currentDisplayedPhaseId = null;
-                poolGenerationBasis = 'initialLevels';
-                rebuildMatchOccurrenceMap();
-                // Effacer l'ID du tournoi actif des données privées de l'utilisateur
-                const userPrivateDataRef = getUserPrivateDataRef();
-                if (userPrivateDataRef) {
-                    window.setDoc(userPrivateDataRef, { activeTournamentId: null }, { merge: true });
-                }
-                handleLocationHash(); // Rediriger vers le tableau de bord des tournois
+                showToast("Le tournoi actif n'est plus accessible.", "error");
+                loadDataFromLocalStorage();
+                handleLocationHash();
             }
         }, (error) => {
             console.error("Erreur lors de l'écoute des données du tournoi:", error);
-            showToast("Erreur de synchronisation des données du tournoi.", "error");
         });
     }
 
@@ -543,47 +503,28 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
      * Récupère la liste de tous les tournois de l'utilisateur (propriétaire ou collaborateur).
      */
     async function fetchUserTournamentsList() {
-        if (!window.userId || !window.db || isGuestMode) {
-            console.warn("Firebase ou User ID non prêt, ou en mode invité pour récupérer la liste des tournois.");
-            allUserTournaments = []; // Ensure it's empty in guest mode
-            return;
-        }
-
-        try {
-            const tournamentsCollectionRef = window.collection(window.db, 'tournaments');
-            const ownerQuery = window.query(tournamentsCollectionRef, window.where('ownerId', '==', window.userId));
-            const collaboratorQuery = window.query(tournamentsCollectionRef, window.where('collaboratorIds', 'array-contains', window.userId));
-
-            const [ownerSnapshot, collaboratorSnapshot] = await Promise.all([
-                window.getDocs(ownerQuery),
-                window.getDocs(collaboratorQuery)
-            ]);
-
-            const ownerTournaments = ownerSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            const collaboratorTournaments = collaboratorSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-            // Fusionner et dédupliquer les tournois
-            const allTournamentsMap = new Map();
-            ownerTournaments.forEach(t => allTournamentsMap.set(t.id, t));
-            collaboratorTournaments.forEach(t => allTournamentsMap.set(t.id, t));
-
-            allUserTournaments = Array.from(allTournamentsMap.values());
-            console.log("Liste des tournois de l'utilisateur mise à jour:", allUserTournaments.length);
-
-            // Si l'utilisateur n'a pas de tournoi actif mais en a dans sa liste, on peut en sélectionner un par défaut
-            if (!currentTournamentId && allUserTournaments.length > 0) {
-                // Tenter de charger le premier tournoi de la liste comme tournoi actif
-                await selectTournament(allUserTournaments[0].id);
-            } else if (!currentTournamentId && allUserTournaments.length === 0) {
-                // Si aucun tournoi et aucun tournoi actif, rediriger vers le tableau de bord des tournois
-                handleLocationHash(); // Cela appellera renderTournamentDashboard si le hash est vide ou #tournaments
-            }
-        } catch (error) {
-            console.error("Erreur lors de la récupération de la liste des tournois:", error);
-            showToast("Erreur lors du chargement de la liste de vos tournois.", "error");
-            allUserTournaments = [];
-        }
+    if (!window.userId || !window.db || isGuestMode) {
+        allUserTournaments = [];
+        return;
     }
+    try {
+        const tournamentsCollectionRef = window.collection(window.db, 'tournaments');
+        const q = window.query(tournamentsCollectionRef, window.where('ownerId', '==', window.userId));
+        const querySnapshot = await window.getDocs(q);
+        allUserTournaments = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        console.log("Liste des tournois de l'utilisateur mise à jour:", allUserTournaments.length);
+
+        if (!currentTournamentId && allUserTournaments.length > 0) {
+            await selectTournament(allUserTournaments[0].id);
+        } else if (!currentTournamentId && allUserTournaments.length === 0) {
+            handleLocationHash();
+        }
+    } catch (error) {
+        console.error("Erreur lors de la récupération de la liste des tournois:", error);
+        showToast("Erreur lors du chargement de la liste de vos tournois.", "error");
+        allUserTournaments = [];
+    }
+}
 
     /**
      * Sélectionne un tournoi comme tournoi actif pour l'utilisateur.
@@ -608,9 +549,9 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
         try {
             await window.setDoc(userPrivateDataRef, { activeTournamentId: tournamentId }, { merge: true });
             console.log(`Tournoi ${tournamentId} défini comme actif.`);
-            // loadAllData() sera déclenché par le listener sur userPrivateDataRef
             showToast("Tournoi sélectionné avec succès !", "success");
-            window.location.hash = '#home'; // Rediriger vers l'accueil du tournoi
+            // La redirection vers #home a été retirée. La logique de rechargement
+            // des données est maintenant gérée par la fonction appelante si nécessaire.
         } catch (error) {
             console.error("Erreur lors de la définition du tournoi actif:", error);
             showToast("Erreur lors de la sélection du tournoi.", "error");
@@ -635,7 +576,7 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
         }
 
         try {
-            const newTournamentDocRef = window.doc(window.collection(window.db, 'tournaments')); // Firestore générera un ID
+            const newTournamentDocRef = window.doc(window.collection(window.db, 'tournaments'));
             const newTournamentId = newTournamentDocRef.id;
 
             const initialTournamentData = {
@@ -643,11 +584,8 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
                 date: date,
                 numTeamsAllowed: numTeams,
                 ownerId: window.userId,
-                collaboratorIds: [], // Initialement vide
-                collaboratorEmails: [], // Pour affichage/gestion, pas pour les règles de sécurité
-                createdAt: window.serverTimestamp ? window.serverTimestamp() : Date.now(), // Utiliser serverTimestamp si disponible
-                poolGenerationBasis: 'initialLevels', // Default for new tournaments
-                // Initialiser les données du tournoi avec des valeurs vides
+                createdAt: window.serverTimestamp ? window.serverTimestamp() : Date.now(),
+                poolGenerationBasis: 'initialLevels',
                 allTeams: [],
                 allBrassagePhases: [],
                 eliminationPhases: {},
@@ -657,18 +595,25 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
             };
 
             await window.setDoc(newTournamentDocRef, initialTournamentData);
-            console.log("Nouveau tournoi créé avec ID:", newTournamentId);
             showToast("Tournoi créé avec succès !", "success");
 
-            // Définir ce nouveau tournoi comme le tournoi actif de l'utilisateur
+            // --- DÉBUT DE LA CORRECTION ---
+            // 1. Sélectionne le nouveau tournoi sans rediriger
             await selectTournament(newTournamentId);
-            // fetchUserTournamentsList() sera appelé par le listener de userPrivateDataRef
-            // handleLocationHash() sera appelé après le chargement du tournoi
+            
+            // 2. Recharge la liste des tournois pour inclure le nouveau
+            await fetchUserTournamentsList();
+            
+            // 3. Redessine la page du tableau de bord avec la liste à jour
+            renderTournamentDashboard();
+            // --- FIN DE LA CORRECTION ---
+
         } catch (error) {
             console.error("Erreur lors de la création du tournoi:", error);
             showToast("Erreur lors de la création du tournoi.", "error");
         }
     }
+	
 
     /**
      * Supprime un tournoi. Seul le propriétaire peut le faire.
@@ -937,20 +882,51 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
         }
     }
 
-    /**
-     * Met à jour l'affichage du nom du tournoi actif dans la barre de navigation.
+    
+	/**
+     * Met à jour l'affichage du nom, de la date et du nombre d'équipes du tournoi
+     * actif dans la barre de navigation.
      */
- function updateTournamentDisplay() {
+    function updateTournamentDisplay() {
+        const nameSpan = document.getElementById('current-tournament-name');
+        if (!nameSpan) return;
+
         if (currentTournamentData && currentTournamentId) {
-            let nameDisplay = escapeHtml(currentTournamentData.name);
+            let nameDisplay = "Tournoi: " + escapeHtml(currentTournamentData.name);
             if (isGuestMode) {
-                nameDisplay += ' (Mode Invité)';
+                nameDisplay += ' (Invité)';
             }
-            currentTournamentNameSpan.textContent = `Tournoi: ${nameDisplay}`;
-            currentTournamentNameSpan.classList.remove('hidden');
+            
+            // --- DÉBUT DE LA MODIFICATION ---
+            // Formate la date au format JJ-MM-AAAA
+            let dateDisplay = 'Date non définie';
+            if (currentTournamentData.date) {
+                // Sépare la date AAAA-MM-JJ en parties
+                const dateParts = currentTournamentData.date.split('-'); 
+                // Recombine dans le bon ordre si le format est correct
+                if (dateParts.length === 3) {
+                    dateDisplay = `Date: ${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
+                } else {
+                    // Si le format est inattendu, on affiche la date telle quelle
+                    dateDisplay = `Date: ${escapeHtml(currentTournamentData.date)}`; 
+                }
+            }
+            // --- FIN DE LA MODIFICATION ---
+            
+            const numTeamsAllowed = currentTournamentData.numTeamsAllowed || GUEST_MODE_MAX_TEAMS;
+            const teamsDisplay = `Équipes: ${allTeams.length} / ${numTeamsAllowed}`;
+
+            // Construit le nouveau HTML avec la date formatée
+            nameSpan.innerHTML = `
+                <p class="font-bold">${nameDisplay}</p>
+                <p class="text-xs mt-1">${dateDisplay}</p>
+                <p class="text-xs">${teamsDisplay}</p>
+            `;
+            
+            nameSpan.classList.remove('hidden');
         } else {
-            currentTournamentNameSpan.textContent = 'Aucun tournoi sélectionné';
-            currentTournamentNameSpan.classList.add('italic');
+            nameSpan.textContent = 'Aucun tournoi sélectionné';
+            nameSpan.classList.add('italic');
         }
     }
 
@@ -1147,34 +1123,36 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
      * @param {string} name - Le nom de l'équipe.
      * @param {number} level - Le niveau de l'équipe (1-10).
      */
-    function addTeam(name, level) {
+function addTeam(name, level) {
+        // Vérifie la limite d'équipes pour les tournois connectés et pour le mode invité
+        const limit = isGuestMode ? GUEST_MODE_MAX_TEAMS : (currentTournamentData ? currentTournamentData.numTeamsAllowed : 0);
+        if (allTeams.length >= limit) {
+            showToast(`Limite de ${limit} équipes atteinte pour ce tournoi.`, "error");
+            if (isGuestMode) showLoginRequiredModal();
+            return;
+        }
+        
         if (!name.trim()) {
             showToast("Le nom de l'équipe ne peut pas être vide.", "error");
             return;
         }
-        if (teamExists(name)) { // Utilise la fonction teamExists
-            showToast(`L'équipe "${escapeHtml(name)}" existe déjà. Veuillez choisir un nom différent.`, "error");
+        if (teamExists(name)) {
+            showToast(`L'équipe "${escapeHtml(name)}" existe déjà.`, "error");
             return;
         }
         if (isNaN(level) || level < 1 || level > 10) {
             showToast("Le niveau doit être un nombre entre 1 et 10.", "error");
             return;
         }
-
-        if (isGuestMode && allTeams.length >= GUEST_MODE_MAX_TEAMS) {
-            showLoginRequiredModal();
-            return;
-        }
-
+        
         const newTeam = {
             id: 'team_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
             name: name.trim(),
-            level: level
+            level: parseInt(level)
         };
         allTeams.push(newTeam);
-        saveAllData(); // Will save to localStorage if in guest mode, Firestore if logged in
-        // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot ou manuel
-        showToast(`Équipe "${escapeHtml(name)}" ajoutée avec succès !`, "success");
+        saveAllData();
+        showToast(`Équipe "${escapeHtml(name)}" ajoutée.`, "success");
     }
 
     /**
@@ -2337,61 +2315,227 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
      * Affiche la page d'authentification (connexion/inscription).
      * En mode invité, affiche un message indiquant les limitations.
      */
-    function renderAuthPage() {
+	function renderAuthPage() {
         APP_CONTAINER.innerHTML = `
-            <div class="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
-                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Connexion / Inscription</h1>
-                <div class="mb-4">
-                    <label for="authEmail" class="block text-sm font-medium text-gray-700 mb-1">Email</label>
-                    <input type="email" id="authEmail" placeholder="votre.email@example.com"
-                           class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+            <div class="max-w-md mx-auto mt-10 p-8 bg-white rounded-lg shadow-xl">
+                
+                <div id="login-container">
+                    <h2 class="text-2xl font-bold text-center mb-6">Connexion</h2>
+                    <div class="space-y-4">
+                        <div>
+                            <label for="authEmail" class="block text-sm font-medium text-gray-700">Email</label>
+                            <input type="email" id="authEmail" class="mt-1 w-full p-2 border rounded-md" placeholder="votre.email@example.com">
+                        </div>
+                        <div>
+                            <label for="authPassword" class="block text-sm font-medium text-gray-700">Mot de passe</label>
+                            <input type="password" id="authPassword" class="mt-1 w-full p-2 border rounded-md" placeholder="********">
+                        </div>
+                        <button id="loginBtn" class="w-full bg-blue-600 text-white p-3 rounded-md hover:bg-blue-700 transition">Se connecter</button>
+                        
+                        <div class="text-sm text-center pt-2">
+                            <p class="mt-4">
+                                <a href="#" id="forgotPasswordLink" class="font-medium text-gray-500 hover:text-blue-600 hover:underline">Mot de passe oublié ?</a>
+                            </p>
+                            <p class="mt-2">
+                                Vous n'avez pas encore de compte ? 
+                                <a href="#" id="showRegisterLink" class="font-medium text-blue-600 hover:underline">Créer un compte</a>
+                            </p>
+                        </div>
+                        </div>
                 </div>
-                <div class="mb-6">
-                    <label for="authPassword" class="block text-sm font-medium text-gray-700 mb-1">Mot de passe</label>
-                    <input type="password" id="authPassword" placeholder="********"
-                           class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
+
+                <div id="register-container" class="hidden">
+                    <h2 class="text-2xl font-bold text-center mb-6">Créer un Compte</h2>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label for="registerFirstName" class="block text-sm font-medium">Prénom</label>
+                                <input type="text" id="registerFirstName" class="mt-1 w-full p-2 border rounded-md">
+                            </div>
+                            <div>
+                                <label for="registerLastName" class="block text-sm font-medium">Nom</label>
+                                <input type="text" id="registerLastName" class="mt-1 w-full p-2 border rounded-md">
+                            </div>
+                        </div>
+                        <div>
+                            <label for="registerClubName" class="block text-sm font-medium">Nom du club</label>
+                            <input type="text" id="registerClubName" class="mt-1 w-full p-2 border rounded-md">
+                        </div>
+                        <div>
+                            <label for="registerPhone" class="block text-sm font-medium">Téléphone</label>
+                            <input type="tel" id="registerPhone" class="mt-1 w-full p-2 border rounded-md">
+                        </div>
+                        <div>
+                            <label for="registerEmail" class="block text-sm font-medium">Email</label>
+                            <input type="email" id="registerEmail" class="mt-1 w-full p-2 border rounded-md">
+                        </div>
+                        <div>
+                            <label for="registerPassword" class="block text-sm font-medium">Mot de passe</label>
+                            <input type="password" id="registerPassword" class="mt-1 w-full p-2 border rounded-md">
+                        </div>
+                        <div>
+                            <label for="registerConfirmPassword" class="block text-sm font-medium">Confirmez le mot de passe</label>
+                            <input type="password" id="registerConfirmPassword" class="mt-1 w-full p-2 border rounded-md">
+                        </div>
+                        <button id="registerBtn" class="w-full bg-green-600 text-white p-3 rounded-md hover:bg-green-700 transition">Créer mon compte</button>
+                        <p class="text-sm text-center">
+                            Déjà un compte ? 
+                            <a href="#" id="showLoginLink" class="font-medium text-blue-600 hover:underline">Se connecter</a>
+                        </p>
+                    </div>
                 </div>
-                <div class="flex flex-col space-y-3">
-                    <button id="loginBtn"
-                            class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        Se connecter
-                    </button>
-                    <button id="registerBtn"
-                            class="w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        S'inscrire
-                    </button>
-                </div>
+                
                 <p id="authMessage" class="mt-4 text-sm text-center text-red-500"></p>
-                <div class="mt-6 p-4 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-800 text-sm">
-                    <p class="font-semibold mb-2">Mode Invité :</p>
-                    <p>Vous pouvez utiliser l'application gratuitement sans connexion pour gérer jusqu'à ${GUEST_MODE_MAX_TEAMS} équipes. Les données sont sauvegardées localement dans votre navigateur.</p>
-                    <p class="mt-2">Pour des tournois plus importants et une sauvegarde sécurisée de vos données, veuillez vous connecter ou créer un compte.</p>
-                </div>
-                <div class="mt-4 text-center">
-                    <button id="continueAsGuestBtn"
-                            class="bg-gray-400 text-white py-2 px-4 rounded-md hover:bg-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        Continuer en mode invité
-                    </button>
-                </div>
-            </div>
-        `;
+            </div>`;
         setupAuthPageLogic();
+    }
+	/**
+     * Affiche la page de gestion du compte utilisateur.
+     */
+    async function renderAccountPage() {
+        if (!window.userId) {
+            window.location.hash = '#auth';
+            return;
+        }
+
+        APP_CONTAINER.innerHTML = `<div class="text-center p-8"><p>Chargement des informations du compte...</p></div>`;
+
+        try {
+            const userDocRef = window.doc(window.db, "users", window.userId);
+            const docSnap = await window.getDoc(userDocRef);
+
+            if (docSnap.exists()) {
+                const userData = docSnap.data();
+                APP_CONTAINER.innerHTML = `
+                    <div class="max-w-2xl mx-auto p-8 bg-white rounded-lg shadow-xl">
+                        <h2 class="text-3xl font-bold text-center mb-6">Mon Compte</h2>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Email (non modifiable)</label>
+                                <input type="email" disabled class="mt-1 w-full p-2 border rounded-md bg-gray-100" value="${escapeHtml(userData.email || '')}">
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label for="accountFirstName" class="block text-sm font-medium">Prénom</label>
+                                    <input type="text" id="accountFirstName" class="mt-1 w-full p-2 border rounded-md" value="${escapeHtml(userData.firstName || '')}">
+                                </div>
+                                <div>
+                                    <label for="accountLastName" class="block text-sm font-medium">Nom</label>
+                                    <input type="text" id="accountLastName" class="mt-1 w-full p-2 border rounded-md" value="${escapeHtml(userData.lastName || '')}">
+                                </div>
+                            </div>
+                            <div>
+                                <label for="accountClubName" class="block text-sm font-medium">Nom du club</label>
+                                <input type="text" id="accountClubName" class="mt-1 w-full p-2 border rounded-md" value="${escapeHtml(userData.clubName || '')}">
+                            </div>
+                            <div>
+                                <label for="accountPhone" class="block text-sm font-medium">Téléphone</label>
+                                <input type="tel" id="accountPhone" class="mt-1 w-full p-2 border rounded-md" value="${escapeHtml(userData.phone || '')}">
+                            </div>
+                            <p id="accountMessage" class="text-sm text-center text-red-500"></p>
+                            <div class="flex flex-col sm:flex-row gap-4 pt-4">
+                                <button id="updateProfileBtn" class="w-full bg-blue-600 text-white p-3 rounded-md hover:bg-blue-700 transition">Enregistrer les modifications</button>
+                                <button id="changePasswordBtn" class="w-full bg-gray-600 text-white p-3 rounded-md hover:bg-gray-700 transition">Changer le mot de passe</button>
+                            </div>
+                        </div>
+                    </div>`;
+                setupAccountPageLogic();
+            } else {
+                APP_CONTAINER.innerHTML = `<p class="text-red-500">Erreur: Impossible de trouver les informations de votre profil.</p>`;
+            }
+        } catch (error) {
+            console.error("Erreur de chargement du profil:", error);
+            APP_CONTAINER.innerHTML = `<p class="text-red-500">Une erreur est survenue lors du chargement de votre profil.</p>`;
+        }
     }
 
     /**
+     * Attache la logique aux éléments de la page "Mon Compte".
+     */
+    function setupAccountPageLogic() {
+        document.getElementById('updateProfileBtn').addEventListener('click', async () => {
+            const newData = {
+                firstName: document.getElementById('accountFirstName').value.trim(),
+                lastName: document.getElementById('accountLastName').value.trim(),
+                clubName: document.getElementById('accountClubName').value.trim(),
+                phone: document.getElementById('accountPhone').value.trim()
+            };
+
+            if (!newData.firstName || !newData.lastName || !newData.clubName) {
+                showToast("Le nom, prénom et nom du club ne peuvent pas être vides.", "error");
+                return;
+            }
+
+            try {
+                const userDocRef = window.doc(window.db, "users", window.userId);
+                await window.updateDoc(userDocRef, newData);
+                showToast("Profil mis à jour avec succès !", "success");
+            } catch (error) {
+                showToast("Erreur lors de la mise à jour du profil.", "error");
+                console.error("Erreur de mise à jour du profil:", error);
+            }
+        });
+
+        document.getElementById('changePasswordBtn').addEventListener('click', () => {
+            const userEmail = window.auth.currentUser.email;
+
+            // --- DÉBUT DE LA MODIFICATION ---
+            // On crée un conteneur pour le nouveau message
+            const modalContent = document.createElement('div');
+            modalContent.innerHTML = `
+                <p class="text-gray-700 mb-4">Un e-mail pour changer votre mot de passe va être envoyé à : <span class="font-bold">${escapeHtml(userEmail)}</span>.</p>
+                <p class="text-sm text-gray-500">N'hésitez pas à regarder vos courriers indésirables (spam) si vous ne voyez pas le mail dans votre boite de réception.</p>
+            `;
+            
+            showModal('Changer le mot de passe', modalContent, async () => {
+                try {
+                    await window.sendPasswordResetEmail(window.auth, userEmail);
+                    showToast("Email envoyé ! Veuillez consulter votre boîte de réception.", "success");
+                } catch (error) {
+                    showToast("Erreur : " + error.message, "error");
+                }
+            });
+            // --- FIN DE LA MODIFICATION ---
+        });
+    }
+	
+    /**
      * Logique de la page d'authentification.
      */
-    function setupAuthPageLogic() {
-        const authEmailInput = document.getElementById('authEmail');
-        const authPasswordInput = document.getElementById('authPassword');
-        const loginBtn = document.getElementById('loginBtn');
-        const registerBtn = document.getElementById('registerBtn');
-        const authMessage = document.getElementById('authMessage');
-        const continueAsGuestBtn = document.getElementById('continueAsGuestBtn'); // New button
+function setupAuthPageLogic() {
+    // Récupération des éléments DOM
+    const loginContainer = document.getElementById('login-container');
+    const registerContainer = document.getElementById('register-container');
+    const showRegisterLink = document.getElementById('showRegisterLink');
+    const showLoginLink = document.getElementById('showLoginLink');
+    const forgotPasswordLink = document.getElementById('forgotPasswordLink');
+    const authMessage = document.getElementById('authMessage');
 
+    // --- Logique pour basculer entre les formulaires ---
+    if (showRegisterLink) {
+        showRegisterLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (loginContainer) loginContainer.classList.add('hidden');
+            if (registerContainer) registerContainer.classList.remove('hidden');
+            if (authMessage) authMessage.textContent = '';
+        });
+    }
+
+    if (showLoginLink) {
+        showLoginLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (registerContainer) registerContainer.classList.add('hidden');
+            if (loginContainer) loginContainer.classList.remove('hidden');
+            if (authMessage) authMessage.textContent = '';
+        });
+    }
+
+    // --- Logique du formulaire de Connexion ---
+    const loginBtn = document.getElementById('loginBtn');
+    if (loginBtn) {
         loginBtn.addEventListener('click', async () => {
-            const email = authEmailInput.value.trim();
-            const password = authPasswordInput.value.trim();
+            const email = document.getElementById('authEmail').value.trim();
+            const password = document.getElementById('authPassword').value.trim();
             if (!email || !password) {
                 authMessage.textContent = "Veuillez entrer un email et un mot de passe.";
                 return;
@@ -2399,49 +2543,112 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
             try {
                 await window.signInWithEmailAndPassword(window.auth, email, password);
                 showToast("Connexion réussie !", "success");
-                authMessage.textContent = "";
-                // Clear local guest data on successful login
-                clearGuestData();
-                // Redirection gérée par onAuthStateChanged -> loadAllData -> handleLocationHash
+                // La redirection est gérée par onAuthStateChanged qui recharge les données
             } catch (error) {
-                console.error("Erreur de connexion:", error);
-                authMessage.textContent = "Erreur de connexion: " + error.message;
-                showToast("Erreur de connexion: " + error.message, "error");
+                authMessage.textContent = "Erreur de connexion : L'email ou le mot de passe est incorrect.";
             }
         });
+    }
 
+    // --- Logique du formulaire d'Inscription ---
+    const registerBtn = document.getElementById('registerBtn');
+    if (registerBtn) {
         registerBtn.addEventListener('click', async () => {
-            const email = authEmailInput.value.trim();
-            const password = authPasswordInput.value.trim();
-            if (!email || !password) {
-                authMessage.textContent = "Veuillez entrer un email et un mot de passe.";
+            // Récupération de toutes les valeurs des champs
+            const firstName = document.getElementById('registerFirstName').value.trim();
+            const lastName = document.getElementById('registerLastName').value.trim();
+            const clubName = document.getElementById('registerClubName').value.trim();
+            const phone = document.getElementById('registerPhone').value.trim();
+            const email = document.getElementById('registerEmail').value.trim();
+            const password = document.getElementById('registerPassword').value.trim();
+            const confirmPassword = document.getElementById('registerConfirmPassword').value.trim();
+            
+            // Vérifications de validité
+            if (!firstName || !lastName || !clubName || !email || !password || !confirmPassword) {
+                authMessage.textContent = "Veuillez remplir tous les champs.";
                 return;
             }
             if (password.length < 6) {
                 authMessage.textContent = "Le mot de passe doit contenir au moins 6 caractères.";
                 return;
             }
+            if (password !== confirmPassword) {
+                authMessage.textContent = "Les mots de passe ne correspondent pas.";
+                return;
+            }
+
             try {
-                await window.createUserWithEmailAndPassword(window.auth, email, password);
+                // Étape 1 : Créer l'utilisateur dans Firebase Authentication
+                const userCredential = await window.createUserWithEmailAndPassword(window.auth, email, password);
+                const user = userCredential.user;
+
+                // Étape 2 : Créer un document dans Firestore pour stocker les informations du profil
+                const userDocRef = window.doc(window.db, "users", user.uid);
+                const userData = {
+                    firstName,
+                    lastName,
+                    clubName,
+                    phone,
+                    email: user.email,
+                    createdAt: new Date()
+                };
+                await window.setDoc(userDocRef, userData);
+                
                 showToast("Inscription réussie ! Vous êtes maintenant connecté.", "success");
-                authMessage.textContent = "";
-                // Clear local guest data on successful registration
-                clearGuestData();
-                // Redirection gérée par onAuthStateChanged -> loadAllData -> handleLocationHash
+                 // La redirection est gérée par onAuthStateChanged
+
             } catch (error) {
-                console.error("Erreur d'inscription:", error);
-                authMessage.textContent = "Erreur d'inscription: " + error.message;
-                showToast("Erreur d'inscription: " + error.message, "error");
+                if (error.code === 'auth/email-already-in-use') {
+                    authMessage.textContent = "Cette adresse e-mail est déjà utilisée.";
+                } else {
+                    authMessage.textContent = "Erreur d'inscription: " + error.message;
+                }
             }
         });
+    }
+    
+	function cleanupFirestoreListeners() {
+        if (currentUserPrivateDataUnsubscribe) {
+            currentUserPrivateDataUnsubscribe();
+            currentUserPrivateDataUnsubscribe = null;
+            console.log("Listener de données privées détaché.");
+        }
+        if (currentTournamentUnsubscribe) {
+            currentTournamentUnsubscribe();
+            currentTournamentUnsubscribe = null;
+            console.log("Listener de tournoi détaché.");
+        }
+    }
+    // Cette ligne est cruciale pour que index.html puisse trouver la fonction
+    window.cleanupFirestoreListeners = cleanupFirestoreListeners;
+    // --- Logique du mot de passe oublié ---
+    if (forgotPasswordLink) {
+        forgotPasswordLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            const emailForReset = document.getElementById('authEmail').value.trim();
+            
+            if (!emailForReset) {
+                showToast("Veuillez d'abord entrer votre adresse e-mail dans le champ 'Email'.", "error");
+                return;
+            }
+            
+            const modalContent = document.createElement('div');
+            modalContent.innerHTML = `
+                <p class="text-gray-700 mb-4">Un e-mail pour réinitialiser votre mot de passe va être envoyé à : <span class="font-bold">${escapeHtml(emailForReset)}</span>.</p>
+                <p class="text-sm text-gray-500">N'hésitez pas à regarder vos courriers indésirables (SPAM) si vous ne voyez pas l'e-mail.</p>
+            `;
 
-        // New event listener for "Continue as Guest" button
-        continueAsGuestBtn.addEventListener('click', () => {
-            isGuestMode = true;
-            loadDataFromLocalStorage(); // Load any existing guest data
-            window.location.hash = '#home'; // Redirect to home page
+            showModal('Confirmer la réinitialisation', modalContent, async () => {
+                try {
+                    await window.sendPasswordResetEmail(window.auth, emailForReset);
+                    showToast("Email de réinitialisation envoyé ! Veuillez consulter votre boîte de réception.", "success");
+                } catch (error) {
+                    showToast("Erreur : " + error.message, "error");
+                }
+            });
         });
     }
+}
 
     /**
      * Affiche la page d'accueil du tournoi.
@@ -2520,7 +2727,7 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
                         </li>
                     </ul>
                     <p class="text-sm text-center italic text-gray-600 mt-4">
-                        Notre objectif est de rendre l'organisation transparente et amusante !
+                        Notre objectif est de rendre l'organisation transparente et efficace !
                     </p>
                 </div>
                 <p class="text-2xl text-center font-extrabold text-blue-700 mt-12">
@@ -2783,13 +2990,7 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
             }, true);
         });
 
-        importTeamsBtn.addEventListener('click', () => {
-            if (isGuestMode && allTeams.length >= GUEST_MODE_MAX_TEAMS) {
-                showToast(`En mode invité, vous ne pouvez pas importer plus de ${GUEST_MODE_MAX_TEAMS} équipes.`, "error");
-                showLoginRequiredModal();
-                return;
-            }
-
+		importTeamsBtn.addEventListener('click', () => {
             const file = excelFileInput.files[0];
             if (!file) {
                 showToast("Veuillez sélectionner un fichier Excel.", "error");
@@ -2804,67 +3005,57 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
                 const worksheet = workbook.Sheets[firstSheetName];
                 const json = XLSX.utils.sheet_to_json(worksheet);
 
+                // --- DÉBUT DE LA MODIFICATION ---
+                const limit = isGuestMode ? GUEST_MODE_MAX_TEAMS : (currentTournamentData ? currentTournamentData.numTeamsAllowed : 0);
+                const currentTeamCount = allTeams.length;
+                if (currentTeamCount + json.length > limit) {
+                    showToast(`L'import de ${json.length} équipes dépasserait la limite de ${limit} équipes pour ce tournoi.`, "error");
+                    if (isGuestMode) showLoginRequiredModal();
+                    return;
+                }
+                // --- FIN DE LA MODIFICATION ---
+
                 let importedCount = 0;
                 let failedCount = 0;
                 let newTeams = [];
                 let skippedNames = [];
 
                 json.forEach(row => {
-                    const name = row['Nom']; // Assurez-vous que le nom de la colonne est 'Nom'
-                    const level = parseInt(row['Niveau']); // Assurez-vous que le nom de la colonne est 'Niveau'
+                    const name = row['Nom'];
+                    const level = parseInt(row['Niveau']);
 
                     if (name && !isNaN(level) && level >= 1 && level <= 10) {
                         if (teamExists(name)) {
                             skippedNames.push(name);
                             failedCount++;
                         } else {
-                            if (isGuestMode && (allTeams.length + newTeams.length) >= GUEST_MODE_MAX_TEAMS) {
-                                // If in guest mode and adding this team would exceed the limit
-                                skippedNames.push(name + " (Limite invité)");
-                                failedCount++;
-                            } else {
-                                newTeams.push({
-                                    id: 'team_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
-                                    name: name,
-                                    level: level
-                                });
-                                importedCount++;
-                            }
+                            newTeams.push({
+                                id: 'team_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
+                                name: name,
+                                level: level
+                            });
+                            importedCount++;
                         }
                     } else {
                         failedCount++;
-                        console.warn('Ligne ignorée en raison de données invalides:', row);
                     }
                 });
 
                 if (importedCount > 0) {
                     allTeams.push(...newTeams);
-                    saveAllData(); // Will save to localStorage if in guest mode, Firestore if logged in
-                    // Le rendu est géré par setupEquipesPageLogic après l'appel à saveAllData via onSnapshot
+                    saveAllData();
                     let successMsg = `${importedCount} équipe(s) importée(s) avec succès.`;
-                    if (skippedNames.length > 0) {
-                        successMsg += ` ${failedCount} équipe(s) ignorée(s) (noms déjà existants, données invalides ou limite invité atteinte) : ${skippedNames.map(escapeHtml).join(', ')}.`;
+                    if (failedCount > 0) {
+                        successMsg += ` ${failedCount} ligne(s) ignorée(s).`;
                     }
                     showToast(successMsg, "success");
-                } else if (json.length > 0) { // If there were rows, but none imported successfully
-                     let errorMsg = "Aucune équipe n'a pu être importée.";
-                     if (skippedNames.length > 0) {
-                         errorMsg += ` Les équipes suivantes n'ont pas été importées : ${skippedNames.map(escapeHtml).join(', ')}.`;
-                     }
-                     errorMsg += " Vérifiez le format des colonnes ('Nom', 'Niveau') et la validité des données (niveau entre 1 et 10).";
-                     showToast(errorMsg, "error");
-                } else { // File was empty or only headers
-                    showToast("Aucune nouvelle équipe n'a été trouvée dans le fichier ou le fichier est vide.", "info");
+                } else {
+                    showToast("Aucune nouvelle équipe valide trouvée dans le fichier.", "error");
                 }
-                excelFileInput.value = ''; // Clear the input after processing
-            };
-            reader.onerror = (ex) => {
-                showToast("Erreur lors de la lecture du fichier : " + ex.message, "error");
-                console.error("Erreur de lecture de fichier:", ex);
+                excelFileInput.value = '';
             };
             reader.readAsArrayBuffer(file);
         });
-
         renderTeams();
     }
 
@@ -3877,19 +4068,8 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
 
 
     function renderEliminatoiresPage() {
-        // Guest mode restriction
-        const guestModeWarning = isGuestMode ? `
-            <div class="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-800 text-sm">
-                <p class="font-semibold mb-2">Mode Invité Actif :</p>
-                <p>Vous êtes en mode invité. Les tournois éliminatoires générés et leurs scores sont sauvegardés localement dans votre navigateur.</p>
-                <p class="mt-2">Pour une sauvegarde sécurisée et la gestion de tournois à grande échelle, veuillez vous <a href="#auth" class="text-blue-700 hover:underline">connecter ou créer un compte</a>.</p>
-            </div>
-        ` : '';
-
         APP_CONTAINER.innerHTML = `
             <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Phase Éliminatoire</h1>
-
-            ${guestModeWarning}
 
             <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
                 <h2 class="text-2xl font-semibold text-gray-700 mb-4">Génération des phases éliminatoires</h2>
@@ -4739,16 +4919,90 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
         setupTournamentDashboardLogic();
     }
 
+/**
+     * Affiche une modale pour éditer les détails d'un tournoi.
+     * @param {object} tournament Le tournoi à modifier.
+     */
+    function showEditTournamentModal(tournament) {
+        const formDiv = document.createElement('div');
+        const currentTeamCount = tournament.allTeams ? tournament.allTeams.length : 0;
+
+        formDiv.innerHTML = `
+            <div class="space-y-4">
+                <div>
+                    <label for="editTournamentName" class="block text-sm font-medium text-gray-700">Nom du Tournoi</label>
+                    <input type="text" id="editTournamentName" class="mt-1 w-full p-2 border rounded-md" value="${escapeHtml(tournament.name)}">
+                </div>
+                <div>
+                    <label for="editTournamentDate" class="block text-sm font-medium text-gray-700">Date</label>
+                    <input type="date" id="editTournamentDate" class="mt-1 w-full p-2 border rounded-md" value="${escapeHtml(tournament.date)}">
+                </div>
+                <div>
+                    <label for="editNumTeamsAllowed" class="block text-sm font-medium text-gray-700">Nombre d'équipes maximum</label>
+                    <input type="number" id="editNumTeamsAllowed" min="${currentTeamCount}" class="mt-1 w-full p-2 border rounded-md" value="${escapeHtml(tournament.numTeamsAllowed || currentTeamCount)}">
+                    <p class="text-xs text-gray-500 mt-1">Ne peut pas être inférieur au nombre d'équipes déjà inscrites (${currentTeamCount}).</p>
+                </div>
+            </div>
+        `;
+        
+        showModal(`Modifier le tournoi "${escapeHtml(tournament.name)}"`, formDiv, () => {
+            const newName = document.getElementById('editTournamentName').value.trim();
+            const newDate = document.getElementById('editTournamentDate').value;
+            const newNumTeams = parseInt(document.getElementById('editNumTeamsAllowed').value);
+            
+            updateTournamentDetails(tournament.id, newName, newDate, newNumTeams);
+        });
+    }
+
+
+
+	/**
+     * fonction de mise à jour. Cette fonction va sauvegarder les modifications dans Firestore
+     */
+	async function updateTournamentDetails(tournamentId, newName, newDate, newNumTeams) {
+        const tournamentRef = getTournamentDataRef(tournamentId);
+        const tournamentToUpdate = allUserTournaments.find(t => t.id === tournamentId);
+        const currentTeamCount = tournamentToUpdate?.allTeams?.length || 0;
+
+        if (!newName || !newDate || isNaN(newNumTeams) || newNumTeams < currentTeamCount) {
+            showToast("Données invalides. Assurez-vous que tous les champs sont remplis et que le nombre d'équipes n'est pas inférieur au nombre actuel.", "error");
+            return;
+        }
+
+        try {
+            await window.updateDoc(tournamentRef, {
+                name: newName,
+                date: newDate,
+                numTeamsAllowed: newNumTeams
+            });
+            showToast("Tournoi mis à jour avec succès !", "success");
+
+            // --- CORRECTION DÉFINITIVE ---
+            // 1. Mettre à jour manuellement la liste locale (plus rapide qu'un nouveau fetch)
+            if (tournamentToUpdate) {
+                tournamentToUpdate.name = newName;
+                tournamentToUpdate.date = newDate;
+                tournamentToUpdate.numTeamsAllowed = newNumTeams;
+            }
+            // 2. Appeler la fonction de rendu qui va redessiner la liste
+            renderTournamentsList();
+            // --- FIN DE LA CORRECTION ---
+
+        } catch (error) {
+            console.error("Erreur de mise à jour du tournoi :", error);
+            showToast("Une erreur est survenue lors de la mise à jour.", "error");
+        }
+    }
     /**
      * Logique du tableau de bord des tournois.
      */
-    function setupTournamentDashboardLogic() {
+	function setupTournamentDashboardLogic() {
         const newTournamentNameInput = document.getElementById('newTournamentName');
         const newTournamentDateInput = document.getElementById('newTournamentDate');
         const newTournamentNumTeamsInput = document.getElementById('newTournamentNumTeams');
         const createTournamentBtn = document.getElementById('createTournamentBtn');
-        const createTournamentMessage = document.getElementById('createTournamentMessage'); // Not used directly
-        const tournamentsListDiv = document.getElementById('tournamentsList');
+
+        if (!createTournamentBtn) return;
 
         createTournamentBtn.addEventListener('click', () => {
             const name = newTournamentNameInput.value.trim();
@@ -4757,265 +5011,72 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
             createNewTournament(name, date, numTeams);
         });
 
-        function renderTournamentsList() {
-            tournamentsListDiv.innerHTML = '';
-            if (allUserTournaments.length === 0) {
-                tournamentsListDiv.innerHTML = '<p class="text-gray-500 text-center">Aucun tournoi disponible. Créez-en un nouveau !</p>';
-                return;
-            }
-
-            allUserTournaments.forEach(tournament => {
-                const isOwner = tournament.ownerId === window.userId;
-                const isSelected = currentTournamentId === tournament.id;
-                const tourneyDiv = document.createElement('div');
-                tourneyDiv.className = `flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 bg-white border rounded-md shadow-sm ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'}`;
-
-                let collaboratorEmailsHtml = '';
-                if (tournament.collaboratorEmails && tournament.collaboratorEmails.length > 0) {
-                    collaboratorEmailsHtml = `<p class="text-xs text-gray-600 mt-1">Collaborateurs: ${tournament.collaboratorEmails.map(email => escapeHtml(email)).join(', ')}</p>`;
-                }
-
-                tourneyDiv.innerHTML = `
-                    <div class="flex-grow">
-                        <p class="text-lg font-medium text-gray-800">${escapeHtml(tournament.name)} ${isSelected ? '<span class="text-blue-600 text-sm ml-2">(Actif)</span>' : ''}</p>
-                        <p class="text-sm text-gray-600">Date: ${escapeHtml(tournament.date)} | Équipes prévues: ${escapeHtml(tournament.numTeamsAllowed.toString())}</p>
-                        <p class="text-sm text-gray-600">Propriétaire: ${isOwner ? 'Moi' : (tournament.ownerEmail ? escapeHtml(tournament.ownerEmail) : 'Inconnu')}</p>
-                        ${collaboratorEmailsHtml}
-                    </div>
-                    <div class="flex space-x-2 mt-3 sm:mt-0">
-                        <button data-id="${tournament.id}" class="select-tournament-btn bg-blue-500 text-white px-3 py-1 rounded-md hover:bg-blue-600 text-sm transition duration-150 ${isSelected ? 'opacity-50 cursor-not-allowed' : ''}" ${isSelected ? 'disabled' : ''}>
-                            Sélectionner
-                        </button>
-                        ${isOwner ? `<button data-id="${tournament.id}" class="delete-tournament-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition duration-150">
-                            Supprimer
-                        </button>` : ''}
-                    </div>
-                `;
-                tournamentsListDiv.appendChild(tourneyDiv);
-            });
-
-            document.querySelectorAll('.select-tournament-btn').forEach(button => {
-                button.addEventListener('click', (event) => {
-                    selectTournament(event.target.dataset.id);
-                });
-            });
-
-            document.querySelectorAll('.delete-tournament-btn').forEach(button => {
-                button.addEventListener('click', (event) => {
-                    deleteTournament(event.target.dataset.id);
-                });
-            });
-        }
-
-        // Listen for changes in allUserTournaments and re-render
-        // This is handled by loadAllData which fetches the list on auth state change
-        // and then calls handleLocationHash which calls renderTournamentDashboard.
-        // So, renderTournamentsList is called when the page is rendered.
+        // La seule responsabilité de cette fonction est maintenant d'appeler le rendu initial.
         renderTournamentsList();
     }
 
-    /**
-     * Affiche la page de gestion des collaborateurs.
+	/**
+     * Affiche la liste des tournois et attache les écouteurs d'événements.
+     * Cette fonction est maintenant indépendante pour pouvoir être appelée après une mise à jour.
      */
-    function renderCollaboratorsPage() {
-        if (isGuestMode) {
-            APP_CONTAINER.innerHTML = `
-                <div class="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10 text-center">
-                    <h1 class="text-2xl font-bold text-gray-800 mb-4">Fonctionnalité non disponible en mode invité</h1>
-                    <p class="text-gray-700">Veuillez vous <a href="#auth" class="text-blue-700 hover:underline">connecter ou créer un compte</a> pour gérer les collaborateurs.</p>
-                    <button onclick="window.location.hash='#home'" class="mt-4 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">Retour à l'accueil</button>
-                </div>
-            `;
-            return;
-        }
-        if (!currentTournamentData || currentTournamentData.ownerId !== window.userId) {
-            APP_CONTAINER.innerHTML = `
-                <div class="max-w-md mx-auto bg-white p-8 rounded-lg shadow-md mt-10 text-center">
-                    <h1 class="text-2xl font-bold text-gray-800 mb-4">Accès Refusé</h1>
-                    <p class="text-gray-700">Vous devez être le propriétaire du tournoi pour gérer les collaborateurs.</p>
-                    <button onclick="window.location.hash='#home'" class="mt-4 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">Retour à l'accueil</button>
-                </div>
-            `;
+    function renderTournamentsList() {
+        const tournamentsListDiv = document.getElementById('tournamentsList');
+        if (!tournamentsListDiv) return; // Ne fait rien si on n'est pas sur la bonne page
+
+        tournamentsListDiv.innerHTML = '';
+        if (!allUserTournaments || allUserTournaments.length === 0) {
+            tournamentsListDiv.innerHTML = '<p class="text-gray-500 text-center">Aucun tournoi disponible. Créez-en un nouveau !</p>';
             return;
         }
 
-        APP_CONTAINER.innerHTML = `
-            <div class="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md mt-10">
-                <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Gérer les Collaborateurs du Tournoi</h1>
-                <p class="text-center text-gray-600 mb-6">
-                    Tournoi actuel : <span class="font-semibold">${escapeHtml(currentTournamentData.name)}</span>
-                </p>
+        allUserTournaments.forEach(tournament => {
+            const isOwner = tournament.ownerId === window.userId;
+            const isSelected = currentTournamentId === tournament.id;
+            const tourneyDiv = document.createElement('div');
+            tourneyDiv.className = `flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 bg-white border rounded-md shadow-sm ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'}`;
 
-                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter un Collaborateur par UID</h2>
-                    <p class="text-gray-600 mb-4">
-                        Pour ajouter un collaborateur avec un accès réel au tournoi (selon les règles de sécurité Firestore),
-                        vous devez connaître son UID Firebase.
-                    </p>
-                    <div class="flex flex-col sm:flex-row gap-4 items-end">
-                        <div class="flex-grow">
-                            <label for="collaboratorUidInput" class="block text-sm font-medium text-gray-700 mb-1">UID du Collaborateur</label>
-                            <input type="text" id="collaboratorUidInput" placeholder="Entrez l'UID Firebase du collaborateur"
-                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
-                        </div>
-                        <button id="addCollaboratorUidBtn"
-                                class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                            Ajouter par UID
-                        </button>
-                    </div>
-                </section>
+            const numTeamsDisplay = tournament.numTeamsAllowed != null ? escapeHtml(tournament.numTeamsAllowed.toString()) : 'N/A';
 
-                <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter un Collaborateur par Email (pour affichage)</h2>
-                    <p class="text-gray-600 mb-4">
-                        Vous pouvez ajouter des adresses e-mail pour suivre les collaborateurs, mais cela ne leur donne
-                        **pas d'accès automatique** au tournoi via les règles de sécurité Firestore. Pour un accès réel,
-                        une fonction Cloud Firebase est nécessaire pour convertir l'email en UID et mettre à jour les règles.
-                    </p>
-                    <div class="flex flex-col sm:flex-row gap-4 items-end">
-                        <div class="flex-grow">
-                            <label for="collaboratorEmailInput" class="block text-sm font-medium text-gray-700 mb-1">Email du Collaborateur</label>
-                            <input type="email" id="collaboratorEmailInput" placeholder="collaborateur@example.com"
-                                   class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm">
-                        </div>
-                        <button id="addCollaboratorEmailBtn"
-                                class="bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                            Ajouter par Email
-                        </button>
-                    </div>
-                </section>
-
-                <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
-                    <h2 class="text-2xl font-semibold text-gray-700 mb-4">Collaborateurs Actuels</h2>
-                    <div id="currentCollaboratorsList" class="space-y-3">
-                        <p class="text-gray-500 text-center">Aucun collaborateur pour ce tournoi.</p>
-                    </div>
-                </section>
-            </div>
-        `;
-        setupCollaboratorsPageLogic();
-    }
-
-    /**
-     * Logique de la page de gestion des collaborateurs.
-     */
-    function setupCollaboratorsPageLogic() {
-        const collaboratorUidInput = document.getElementById('collaboratorUidInput');
-        const addCollaboratorUidBtn = document.getElementById('addCollaboratorUidBtn');
-        const collaboratorEmailInput = document.getElementById('collaboratorEmailInput');
-        const addCollaboratorEmailBtn = document.getElementById('addCollaboratorEmailBtn');
-        const currentCollaboratorsList = document.getElementById('currentCollaboratorsList');
-
-        function renderCollaborators() {
-            currentCollaboratorsList.innerHTML = '';
-            const collaborators = [];
-
-            // Add owner
-            if (currentTournamentData && currentTournamentData.ownerId) {
-                // Fetch owner email if possible, otherwise use UID
-                const ownerEmail = (window.auth.currentUser && currentTournamentData.ownerId === window.userId) ? window.auth.currentUser.email : 'Propriétaire';
-
-                collaborators.push({
-                    type: 'owner',
-                    id: currentTournamentData.ownerId,
-                    display: `${ownerEmail} (Moi - Propriétaire)`
-                });
-            }
-
-            // Add collaborators by UID
-            if (currentTournamentData && currentTournamentData.collaboratorIds) {
-                currentTournamentData.collaboratorIds.forEach(uid => {
-                    if (uid !== window.userId && uid !== currentTournamentData.ownerId) { // Exclure le propriétaire et l'utilisateur actuel s'il est déjà propriétaire
-                        collaborators.push({
-                            type: 'uid',
-                            id: uid,
-                            display: `UID: ${escapeHtml(uid)} (Accès réel)`
-                        });
-                    }
-                });
-            }
-
-            // Add collaborators by email (for display only)
-            if (currentTournamentData && currentTournamentData.collaboratorEmails) {
-                currentTournamentData.collaboratorEmails.forEach(email => {
-                    // Avoid duplicating if email corresponds to current user (owner)
-                    if (window.auth.currentUser && email === window.auth.currentUser.email && currentTournamentData.ownerId === window.userId) {
-                        // Already covered by the owner entry
-                    } else {
-                        collaborators.push({
-                            type: 'email',
-                            id: email, // Use email as ID for display purposes
-                            display: `Email: ${escapeHtml(email)} (Pour info)`
-                        });
-                    }
-                });
-            }
-
-            if (collaborators.length === 0) {
-                currentCollaboratorsList.innerHTML = '<p class="text-gray-500 text-center">Aucun collaborateur pour ce tournoi.</p>';
-                return;
-            }
-
-            collaborators.forEach(collab => {
-                const collabDiv = document.createElement('div');
-                collabDiv.className = 'flex items-center justify-between p-3 bg-white border border-gray-200 rounded-md shadow-sm';
-                collabDiv.innerHTML = `
-                    <span class="text-gray-800 font-medium flex-grow">${collab.display}</span>
-                    <div class="flex space-x-2 ml-4">
-                        ${collab.type !== 'owner' ? `
-                            <button data-id="${collab.id}" data-type="${collab.type}" class="remove-collaborator-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition duration-150">
-                                Supprimer
-                            </button>
-                        ` : ''}
-                    </div>
-                `;
-                currentCollaboratorsList.appendChild(collabDiv);
-            });
-
-            document.querySelectorAll('.remove-collaborator-btn').forEach(button => {
-                button.addEventListener('click', (event) => {
-                    const collabId = event.target.dataset.id;
-                    const collabType = event.target.dataset.type;
-                    const messageContent = document.createElement('p');
-                    messageContent.textContent = `Êtes-vous sûr de vouloir supprimer ce collaborateur (${escapeHtml(collabId)}) ?`;
-                    messageContent.className = 'text-gray-700';
-
-                    showModal('Confirmer la suppression du collaborateur', messageContent, () => {
-                        if (collabType === 'uid') {
-                            removeCollaboratorByUid(currentTournamentId, collabId);
-                        } else if (collabType === 'email') {
-                            removeCollaboratorByEmailForDisplay(currentTournamentId, collabId);
-                        }
-                    }, true);
-                });
-            });
-        }
-
-        addCollaboratorUidBtn.addEventListener('click', () => {
-            const uid = collaboratorUidInput.value.trim();
-            addCollaboratorByUid(currentTournamentId, uid);
-            collaboratorUidInput.value = '';
+            tourneyDiv.innerHTML = `
+                <div class="flex-grow">
+                    <p class="text-lg font-medium text-gray-800">${escapeHtml(tournament.name)} ${isSelected ? '<span class="text-blue-600 text-sm ml-2">(Actif)</span>' : ''}</p>
+                    <p class="text-sm text-gray-600">Date: ${escapeHtml(tournament.date)} | Équipes max: ${numTeamsDisplay}</p>
+                </div>
+                <div class="flex space-x-2 mt-3 sm:mt-0">
+                    <button data-id="${tournament.id}" class="select-tournament-btn bg-blue-500 text-white px-3 py-1 rounded-md hover:bg-blue-600 text-sm transition ${isSelected ? 'opacity-50 cursor-not-allowed' : ''}" ${isSelected ? 'disabled' : ''}>
+                        Sélectionner
+                    </button>
+                    ${isOwner ? `<button data-id="${tournament.id}" class="edit-tournament-btn bg-yellow-500 text-white px-3 py-1 rounded-md hover:bg-yellow-600 text-sm transition">Éditer</button>` : ''}
+                    ${isOwner ? `<button data-id="${tournament.id}" class="delete-tournament-btn bg-red-500 text-white px-3 py-1 rounded-md hover:bg-red-600 text-sm transition">Supprimer</button>` : ''}
+                </div>
+            `;
+            tournamentsListDiv.appendChild(tourneyDiv);
         });
 
-        addCollaboratorEmailBtn.addEventListener('click', () => {
-            const email = collaboratorEmailInput.value.trim();
-            addCollaboratorByEmailForDisplay(currentTournamentId, email);
-            collaboratorEmailInput.value = '';
+        // Attacher les écouteurs d'événements
+        document.querySelectorAll('.select-tournament-btn').forEach(button => {
+            button.addEventListener('click', (event) => selectTournament(event.target.dataset.id));
         });
 
-        // Initial render and re-render on tournament data change
-        // This is handled by the onSnapshot listener for currentTournamentData
-        renderCollaborators();
+        document.querySelectorAll('.edit-tournament-btn').forEach(button => {
+            button.addEventListener('click', (event) => {
+                const tournamentToEdit = allUserTournaments.find(t => t.id === event.target.dataset.id);
+                if (tournamentToEdit) showEditTournamentModal(tournamentToEdit);
+            });
+        });
+
+        document.querySelectorAll('.delete-tournament-btn').forEach(button => {
+            button.addEventListener('click', (event) => deleteTournament(event.target.dataset.id));
+        });
     }
-
-
+   
     // --- Routage et Initialisation ---
 
     /**
      * Gère les changements de hash dans l'URL pour la navigation.
      */
     function handleLocationHash() {
-        const path = window.location.hash.substring(1); // Supprime le '#' initial
+        const path = window.location.hash.substring(1) || 'home';
         console.log("Navigating to:", path);
 
         // Mettre à jour la visibilité des liens de navigation en premier
@@ -5050,7 +5111,7 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
                         renderAuthPage();
                         return;
                     case 'tournaments': // Les tournois multiples ne sont pas gérés en mode invité
-                    case 'collaborators': // Les collaborateurs ne sont pas gérés en mode invité
+                   
                     case '': // Page par défaut (si vide)
                     default:
                         window.location.hash = '#home'; // Rediriger vers l'accueil pour les routes non autorisées ou par défaut
@@ -5109,9 +5170,9 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
             case 'tournaments':
                 renderTournamentDashboard();
                 break;
-            case 'collaborators':
-                renderCollaboratorsPage();
-                break;
+			case 'account': 
+				renderAccountPage(); 
+				break; 
             case 'auth': // Si déjà connecté et tournoi sélectionné, on renvoie à l'accueil
                 window.location.hash = '#home';
                 renderHomePage();
@@ -5138,105 +5199,53 @@ logoutBtn.addEventListener// Part 1 sur 5 (script.js) - Corrigée
     }
 
     // --- Initialisation de l'Application ---
-    document.addEventListener('DOMContentLoaded', () => {
-        // Attacher les gestionnaires d'événements pour les boutons de la modale globale
-        if (modalCancelBtn) {
-            modalCancelBtn.addEventListener('click', hideModal);
-        } else {
-            console.error("modalCancelBtn non trouvé au chargement du DOM.");
-        }
-        // Le modalConfirmBtn est géré dynamiquement dans showModal()
+	document.addEventListener('DOMContentLoaded', () => {
+        window.onFirebaseReady = loadAllData;
 
-        // Ajout de la transparence à la barre de navigation lors du défilement
-        const navBar = document.querySelector('nav');
-        if (navBar) { // Vérifier si la navBar existe
-            let isScrolled = false;
-            window.addEventListener('scroll', () => {
-                if (window.scrollY > 0) {
-                    if (!isScrolled) {
-                        navBar.classList.add('bg-blue-700/70', 'transition-colors', 'duration-300'); // Plus transparent
-                        navBar.classList.remove('bg-blue-700/90');
-                        isScrolled = true;
-                    }
-                } else {
-                    if (isScrolled) {
-                        navBar.classList.remove('bg-blue-700/70');
-                        navBar.classList.add('bg-blue-700/90'); // Moins transparent
-                        isScrolled = false;
-                    }
-                }
-            });
-        } else {
-            console.warn("Barre de navigation (nav) non trouvée.");
-        }
-
-        // Fonction de rappel appelée par index.html une fois Firebase initialisé et l'état d'authentification connu
-        window.onFirebaseReady = () => {
-            console.log("Firebase est prêt. Chargement des données et gestion du routage.");
-            // onAuthStateChanged (dans initializeFirebaseAndAuth) déclenche loadAllData
-            // loadAllData détermine si c'est guest mode ou logged in and fetches data accordingly
-            // Puis handleLocationHash est appelé pour rendre la bonne page.
-            loadAllData();
-        };
-
-        // Écouter les changements de hash dans l'URL pour le routage
-        window.addEventListener('hashchange', handleLocationHash);
-
-// Gestionnaire pour le bouton de déconnexion
-        logoutBtn.addEventListener('click', async () => {
-            try {
-                // Détacher l'écouteur de données privées de l'utilisateur si il existe
-                if (window.currentUserPrivateDataUnsubscribe) { // Nouvelle variable pour ce listener
-                    window.currentUserPrivateDataUnsubscribe();
-                    window.currentUserPrivateDataUnsubscribe = null;
-                    console.log("Ancien listener des données privées de l'utilisateur détaché.");
-                }
-
-                // Détacher l'écouteur du tournoi actif s'il existe
-                if (window.currentTournamentUnsubscribe) {
-                    window.currentTournamentUnsubscribe();
-                    window.currentTournamentUnsubscribe = null;
-                    console.log("Ancien listener de tournoi détaché.");
-                }
-
-                if (window.auth) { // Ensure auth is initialized before calling signOut
-                    await window.signOut(window.auth);
-                }
-                showToast("Déconnexion réussie !", "info");
-                // Réinitialiser les variables globales du tournoi
-                currentTournamentId = null;
-                currentTournamentData = null;
-                allTeams = [];
-                allBrassagePhases = [];
-                eliminationPhases = {};
-                currentSecondaryGroupsPreview = {};
-                eliminatedTeams = new Set();
-                currentDisplayedPhaseId = null;
-                allUserTournaments = [];
-                poolGenerationBasis = 'initialLevels'; // Reset to default
-
-                clearGuestData(); // Clear any residual guest data
-                isGuestMode = true; // Switch back to guest mode state
-                loadDataFromLocalStorage(); // Load any existing guest data
-                handleLocationHash(); // Rediriger vers la page d'authentification ou home en mode invité
-            } catch (error) {
-                console.error("Erreur de déconnexion:", error); // Garder le log pour d'autres erreurs éventuelles
-                showToast("Erreur lors de la déconnexion.", "error");
+        // Le cleanup est géré par onAuthStateChanged, on se contente de déconnecter
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            if (window.signOut && window.auth) {
+                await window.signOut(window.auth);
+                showToast("Déconnexion réussie.", "info");
             }
         });
-
-        // Gestionnaire pour le bouton "Changer de tournoi"
-        selectTournamentBtn.addEventListener('click', () => {
+        
+        document.getElementById('select-tournament-btn').addEventListener('click', () => {
             window.location.hash = '#tournaments';
         });
 
-        // Initialisation de la route au premier chargement de la page
-        // Si le hash est vide, définir un hash par défaut.
-        if (window.location.hash === '' || window.location.hash === '#') {
-             window.location.hash = '#home'; // Start on the home page as guest
-        } else {
-            handleLocationHash(); // Process the existing hash
-        }
+        document.getElementById('my-account-btn').addEventListener('click', () => {
+            window.location.hash = '#account';
+        });
+
+        document.getElementById('modalCancelBtn').addEventListener('click', hideModal);
+
+        window.addEventListener('hashchange', handleLocationHash);
+		
+		logoutBtn.addEventListener('click', async () => {
+            // CORRECTION : On arrête les écouteurs AVANT la déconnexion pour éviter les erreurs de permission.
+            cleanupFirestoreListeners();
+
+            try {
+                if (window.auth && window.signOut) {
+                    // On se contente de demander la déconnexion.
+                    // On ne montre PLUS de toast ici.
+                    await window.signOut(window.auth);
+                }
+                // Le message "Déconnexion réussie !" sera affiché une seule fois par la logique
+                // qui se déclenche APRÈS que l'état de connexion a VRAIMENT changé.
+            } catch (error) {
+                console.error("Erreur de déconnexion:", error);
+                showToast("Erreur lors de la déconnexion.", "error");
+            }
+        });
+    });
+	 // --- POINT D'ENTRÉE PRINCIPAL DE L'APPLICATION ---
+    onAuthStateChanged(auth, (user) => {
+        console.log("État d'authentification changé. Utilisateur:", user ? user.uid : "aucun");
+        // Cette fonction est le point de départ qui charge les données
+        // soit pour l'invité, soit pour l'utilisateur connecté.
+        loadAllData(); 
     });
 
 })();
