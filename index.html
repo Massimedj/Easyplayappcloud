@@ -32,14 +32,13 @@
             align-items: flex-start;
         }
         #app-container {
-            margin-left: 10rem;
-            padding: 2rem;
-            min-height: calc(100vh - 4rem);
-            display: flex;
-            flex-direction: column;
-            justify-content: flex-start;
-            align-items: center;
-        }
+			/* Les classes Tailwind p-8 et flex-grow gèrent maintenant ceci */
+			width: 100%; /* S'assure que le main prend toute la largeur disponible */
+			display: flex;
+			flex-direction: column;
+			justify-content: flex-start;
+			align-items: center;
+		}
         footer {
             width: 100%;
         }
@@ -60,6 +59,22 @@
                 padding: 1rem;
             }
         }
+		/* Style pour tous les liens de navigation */
+		.nav-link {
+			opacity: 0.7; /* Par défaut, les liens sont semi-transparents */
+			transition: opacity 0.2s ease-in-out; /* Transition douce */
+		}
+
+		/* Style uniquement pour le lien de la page active */
+		.nav-link.active-link {
+			opacity: 1; /* Le lien actif est 100% visible */
+			font-weight: 600; /* On le met en semi-gras pour qu'il ressorte */
+		}
+
+		/* Style pour le survol de la souris */
+		.nav-link:hover {
+			opacity: 1;
+		}
     </style>
 </head>
 <body class="bg-gray-100">
@@ -78,14 +93,24 @@
             </div>
         </div>
         <ul id="main-nav-links" class="flex flex-col space-y-2 w-full">
-            <li><a href="#home" class="flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-home w-6"></i><span>Accueil</span></a></li>
-            <li id="nav-equipes" class="hidden"><a href="#equipes" class="flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-users w-6"></i><span>Équipes</span></a></li>
-            <li id="nav-brassages" class="hidden"><a href="#brassages" class="flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-layer-group w-6"></i><span>Brassages</span></a></li>
-            <li id="nav-eliminatoires" class="hidden"><a href="#eliminatoires" class="flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-trophy w-6"></i><span>Éliminatoires</span></a></li>
-            <li id="nav-classements" class="hidden"><a href="#classements" class="flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-list-ol w-6"></i><span>Classements</span></a></li>
-        </ul>
+			<li><a href="#home" class="nav-link flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-home w-6"></i><span>Accueil</span></a></li>
+			<li id="nav-equipes" class="hidden"><a href="#equipes" class="nav-link flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-users w-6"></i><span>Équipes</span></a></li>
+			<li id="nav-brassages" class="hidden"><a href="#brassages" class="nav-link flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-layer-group w-6"></i><span>Brassages</span></a></li>
+			<li id="nav-eliminatoires" class="hidden"><a href="#eliminatoires" class="nav-link flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-trophy w-6"></i><span>Éliminatoires</span></a></li>
+			<li id="nav-classements" class="hidden"><a href="#classements" class="nav-link flex items-center space-x-2 text-white hover:text-blue-200 px-3 py-2"><i class="fas fa-list-ol w-6"></i><span>Classements</span></a></li>
+		</ul>
     </nav>
-    <main id="app-container" class="ml-40 p-8"></main>
+   <div class="ml-40 flex flex-col min-h-screen">
+
+        <main id="app-container" class="p-8 flex-grow">
+            </main>
+
+        <footer class="bg-blue-600 text-white p-1 text-center text-sm">
+            © 2025 EasyPlay. Tous droits réservés. Fait par Massi ⵣ. Pour toute question, contactez-moi à <a href="mailto:massi.medj@yahoo.fr" class="text-blue-200 hover:underline">massi.medj@yahoo.fr</a>.
+        </footer>
+
+    </div>
+	
     <div id="actionModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
         <div class="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 id="modalTitle" class="text-xl font-bold mb-4"></h3>
