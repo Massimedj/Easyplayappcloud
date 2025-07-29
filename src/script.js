@@ -3609,34 +3609,24 @@ function renderPools(pools, phaseName = "Poules Actuelles", phaseId = null, show
 }
     // NOUVEAU: Fonction pour la page de sélection des équipes éliminées
     function renderEliminationSelectionPage() {
-        // Guest mode restriction
-        const guestModeWarning = isGuestMode ? `
-            <div class="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-800 text-sm">
-                <p class="font-semibold mb-2">Mode Invité Actif :</p>
-                <p>Vous êtes en mode invité. La modification du statut d'élimination est visible localement, mais pour la sauvegarder de manière permanente et l'appliquer à vos tournois futurs, veuillez vous <a href="#auth" class="text-blue-700 hover:underline">connecter ou créer un compte</a>.</p>
-            </div>
-        ` : '';
+    APP_CONTAINER.innerHTML = `
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Sélection des Équipes Éliminées</h1>
 
-        APP_CONTAINER.innerHTML = `
-            <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Sélection des Équipes Éliminées</h1>
-
-            ${guestModeWarning}
-
-            <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
-                <p class="text-gray-700 mb-4">Cochez les équipes qui seront exclues des phases éliminatoires. Elles n'apparaîtront pas dans les arbres de tournoi.</p>
-                <div id="eliminationTeamsList" class="space-y-3">
-                    </div>
-                <div class="mt-6 text-center">
-                    <button id="saveEliminationSelectionBtn"
-                            class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        Sauvegarder la Sélection
-                    </button>
-                    <p id="eliminationSelectionMessage" class="mt-3 text-sm text-center"></p>
+        <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
+            <p class="text-gray-700 mb-4">Cochez les équipes qui seront exclues des phases éliminatoires. Elles n'apparaîtront pas dans les arbres de tournoi.</p>
+            <div id="eliminationTeamsList" class="space-y-3">
                 </div>
-            </section>
-        `;
-        setupEliminationSelectionPageLogic();
-    }
+            <div class="mt-6 text-center">
+                <button id="saveEliminationSelectionBtn"
+                        class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+                    Sauvegarder la Sélection
+                </button>
+                <p id="eliminationSelectionMessage" class="mt-3 text-sm text-center"></p>
+            </div>
+        </section>
+    `;
+    setupEliminationSelectionPageLogic();
+}
 
     // NOUVEAU: Logique de la page de sélection des équipes éliminées
     function setupEliminationSelectionPageLogic() {
