@@ -1085,71 +1085,68 @@ function addTeam(name, level) {
      * @param {string|null} currentPhaseIdToExclude The ID of the phase currently being generated (to exclude from repetition check).
      * @returns {{pools: Array<Object>|null, repetitions: number, remainingTeamsCount: number}} Object with generated pools, repetition count, and remaining teams.
      */
-    function generateAndEvaluatePools(phaseType, teamsToUse, requestedTeamsPerPool, msgElement, currentPhaseIdToExclude = null) {
-        let generationResult = null;
-        if (phaseType === PHASE_TYPE_INITIAL) {
-            generationResult = _generatePoolsLogicInitialLevels(teamsToUse, requestedTeamsPerPool, msgElement);
-        } else if (phaseType === PHASE_TYPE_SECONDARY_BRASSAGE) {
-            generationResult = _generatePoolsLogicRankingBased(teamsToUse, requestedTeamsPerPool, msgElement);
-        }
+   function generateAndEvaluatePools(phaseType, teamsToUse, requestedTeamsPerPool, msgElement, currentPhaseIdToExclude = null, useInitialLevelsLogic) {
+    let generationResult = null;
 
-        if (!generationResult || !generationResult.pools) {
-            return { pools: null, repetitions: Infinity, remainingTeamsCount: Infinity };
-        }
-
-        const generatedPools = generationResult.pools;
-
-        // Create a temporary, combined list of phases for evaluation, including the new generated one
-        const phasesForEvaluation = [...allBrassagePhases.filter(p => p.id !== currentPhaseIdToExclude)];
-
-        // Create a temporary phase representation for the newly generated pools
-        const tempPhaseForEvaluation = {
-            id: currentPhaseIdToExclude || 'temp_phase_for_eval_' + Date.now(),
-            type: phaseType,
-            name: 'Temp Phase for Evaluation',
-            pools: generatedPools,
-            generated: true,
-            timestamp: Date.now() // Use a unique timestamp for uniqueness in the map
-        };
-        phasesForEvaluation.push(tempPhaseForEvaluation);
-
-
-        // Rebuild a temporary match occurrence map including the new pools
-        const tempMatchOccurrenceMap = new Map();
-        phasesForEvaluation.forEach(p => {
-            if (p.generated && p.pools) {
-                p.pools.forEach(pool => {
-                    pool.matches.forEach(match => {
-                        if (match.team1Id && match.team2Id) {
-                            const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
-                            if (!tempMatchOccurrenceMap.has(matchKey)) {
-                                tempMatchOccurrenceMap.set(matchKey, new Set());
-                            }
-                            tempMatchOccurrenceMap.get(matchKey).add(p.id);
-                        }
-                    });
-                });
-            }
-        });
-
-        let currentRepetitions = 0;
-        // Count repetitions specifically within the newly generated pools against ALL OTHER phases
-        tempPhaseForEvaluation.pools.forEach(pool => {
-            pool.matches.forEach(match => {
-                if (match.team1Id && match.team2Id) {
-                    const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
-                    const occurrences = tempMatchOccurrenceMap.get(matchKey);
-                    // A match is a repetition if it occurs in tempPhaseForEvaluation AND in at least one OTHER phase
-                    if (occurrences && occurrences.has(tempPhaseForEvaluation.id) && Array.from(occurrences).some(id => id !== tempPhaseForEvaluation.id)) {
-                         currentRepetitions++;
-                    }
-                }
-            });
-        });
-
-        return { pools: generatedPools, repetitions: currentRepetitions, remainingTeamsCount: generationResult.remainingTeamsCount };
+    // --- CORRECTION : On choisit l'algorithme en fonction de la méthode sélectionnée ---
+    if (useInitialLevelsLogic) {
+        // Utilise l'algorithme basé sur les niveaux initiaux
+        generationResult = _generatePoolsLogicInitialLevels(teamsToUse, requestedTeamsPerPool, msgElement);
+    } else {
+        // Utilise l'algorithme basé sur le classement par résultats
+        generationResult = _generatePoolsLogicRankingBased(teamsToUse, requestedTeamsPerPool, msgElement);
     }
 
+    if (!generationResult || !generationResult.pools) {
+        return { pools: null, repetitions: Infinity, remainingTeamsCount: Infinity };
+    }
+
+    const generatedPools = generationResult.pools;
+
+    // Le reste de la fonction pour évaluer les répétitions est correct...
+    const phasesForEvaluation = [...allBrassagePhases.filter(p => p.id !== currentPhaseIdToExclude)];
+    const tempPhaseForEvaluation = {
+        id: currentPhaseIdToExclude || 'temp_phase_for_eval_' + Date.now(),
+        type: phaseType,
+        name: 'Temp Phase for Evaluation',
+        pools: generatedPools,
+        generated: true,
+        timestamp: Date.now()
+    };
+    phasesForEvaluation.push(tempPhaseForEvaluation);
+
+    const tempMatchOccurrenceMap = new Map();
+    phasesForEvaluation.forEach(p => {
+        if (p.generated && p.pools) {
+            p.pools.forEach(pool => {
+                pool.matches.forEach(match => {
+                    if (match.team1Id && match.team2Id) {
+                        const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
+                        if (!tempMatchOccurrenceMap.has(matchKey)) {
+                            tempMatchOccurrenceMap.set(matchKey, new Set());
+                        }
+                        tempMatchOccurrenceMap.get(matchKey).add(p.id);
+                    }
+                });
+            });
+        }
+    });
+
+    let currentRepetitions = 0;
+    tempPhaseForEvaluation.pools.forEach(pool => {
+        pool.matches.forEach(match => {
+            if (match.team1Id && match.team2Id) {
+                const matchKey = JSON.stringify([match.team1Id, match.team2Id].sort());
+                const occurrences = tempMatchOccurrenceMap.get(matchKey);
+                if (occurrences && occurrences.has(tempPhaseForEvaluation.id) && Array.from(occurrences).some(id => id !== tempPhaseForEvaluation.id)) {
+                     currentRepetitions++;
+                }
+            }
+        });
+    });
+
+    return { pools: generatedPools, repetitions: currentRepetitions, remainingTeamsCount: generationResult.remainingTeamsCount };
+	}
 
     /**
      * Unified function to generate pools for any brassage phase.
@@ -1285,7 +1282,7 @@ function addTeam(name, level) {
 
         for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             // Generate and evaluate potential pools
-            const result = generateAndEvaluatePools(phaseToGenerate.type, teamsForGeneration, requestedTeamsPerPool, null, phaseIdToUpdate);
+            const result = generateAndEvaluatePools(phaseToGenerate.type, teamsForGeneration, requestedTeamsPerPool, null, phaseIdToUpdate, effectiveUseInitialLevels);
 
             if (result.pools) {
                 // Prioritize fewer repetitions, then fewer remaining teams
@@ -1815,7 +1812,9 @@ function addTeam(name, level) {
             };
             allBrassagePhases.push(eliminationSeedingPhase);
             saveAllData(); // Sauve les données, cela déclenchera le re-rendu de l'UI
-            showToast("Répartition des groupes validée et enregistrée pour les éliminatoires !", "success");
+            showToast("Répartition des groupes validée pour les éliminatoires !", "success");
+			
+			window.location.hash = '#eliminatoires';
         });
     }
 
@@ -1830,7 +1829,7 @@ function addTeam(name, level) {
             Êtes-vous sûr de vouloir valider toutes les équipes (non éliminées)
             pour la phase éliminatoire en vous basant sur le classement général ?
             <br>
-            **Attention :** Cette action écrasera toute configuration de groupes secondaires préalablement validée
+            <strong>Attention :</strong> Cette action écrasera toute configuration de groupes secondaires préalablement validée
             et passera les équipes sélectionnées à l'étape éliminatoire principale.
         `;
         messageContent.className = 'text-gray-700';
@@ -2868,19 +2867,40 @@ function setupAuthPageLogic() {
 function updatePoolGenerationBasisUI() {
     const basisHelpText = document.getElementById('basisHelpText');
     const numberOfGlobalPhasesInput = document.getElementById('numberOfGlobalPhases');
-    if (!basisHelpText || !numberOfGlobalPhasesInput) return;
+    
+    // Sélection des labels pour les mettre en gras
+    const labelInitial = document.querySelector("label[for='basisInitialLevels']");
+    const labelPrevious = document.querySelector("label[for='basisPreviousResults']");
+
+    if (!basisHelpText || !numberOfGlobalPhasesInput || !labelInitial || !labelPrevious) return;
+
+    // Réinitialise l'état du champ de saisie avant d'appliquer les nouvelles règles
+    numberOfGlobalPhasesInput.disabled = false;
+    numberOfGlobalPhasesInput.type = 'number';
+    numberOfGlobalPhasesInput.classList.remove('bg-gray-200', 'cursor-not-allowed', 'text-sm', 'text-gray-500');
+
 
     if (poolGenerationBasis === 'initialLevels') {
+        // --- Comportement pour "Niveaux Initiaux" ---
         document.getElementById('basisInitialLevels').checked = true;
         document.getElementById('basisPreviousResults').checked = false;
-        numberOfGlobalPhasesInput.readOnly = false;
-        basisHelpText.textContent = "Crée des phases en utilisant les niveaux initiaux des équipes. Vous pouvez créer plusieurs phases de brassage initiales si nécessaire.";
+        labelInitial.classList.add('font-bold');
+        labelPrevious.classList.remove('font-bold');
+        
+        numberOfGlobalPhasesInput.value = 1; // Valeur par défaut
+        basisHelpText.textContent = "Crée des phases en utilisant les niveaux initiaux des équipes. Vous pouvez créer plusieurs phases si nécessaire.";
+
     } else { // 'previousResults'
+        // --- Comportement pour "Résultats Précédents" ---
         document.getElementById('basisInitialLevels').checked = false;
         document.getElementById('basisPreviousResults').checked = true;
+        labelInitial.classList.remove('font-bold');
+        labelPrevious.classList.add('font-bold');
+        
+        // Le champ reste modifiable avec une valeur par défaut de 1
         numberOfGlobalPhasesInput.value = 1;
-        numberOfGlobalPhasesInput.readOnly = true;
-        basisHelpText.textContent = "Crée une phase en utilisant les résultats cumulés des brassages précédents. Une seule phase peut être créée à la fois avec cette méthode.";
+        basisHelpText.innerHTML = "Crée une phase en utilisant les résultats cumulés des brassages précédents.<br>Les phases suivantes ne peuvent pas être générées si les phases précédentes ne sont pas encore terminées.";
+		
     }
 }
 
@@ -2995,34 +3015,6 @@ function isBrassagePhaseComplete(phase) {
     }
     return true;
 }
-
-/**
- * Met à jour la visibilité du bouton "Créer la phase suivante".
- */
-function updateNextPhaseButtonVisibility() {
-    const nextBrassagePhaseContainer = document.getElementById('nextBrassagePhaseContainer');
-    const nextBrassagePhaseMessage = document.getElementById('nextBrassagePhaseMessage');
-    if (!nextBrassagePhaseContainer || !nextBrassagePhaseMessage) return;
-
-    const initialOrSecondaryPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE).sort((a, b) => a.timestamp - b.timestamp);
-    const lastBrassagePhase = initialOrSecondaryPhases[initialOrSecondaryPhases.length - 1];
-    const hasUngeneratedPhase = initialOrSecondaryPhases.some(p => !p.generated);
-
-    // Utilise la variable globale `poolGenerationBasis` au lieu de localStorage
-    if (poolGenerationBasis === 'previousResults' && lastBrassagePhase && !hasUngeneratedPhase) {
-        nextBrassagePhaseContainer.classList.remove('hidden');
-        if (isBrassagePhaseComplete(lastBrassagePhase)) {
-            nextBrassagePhaseMessage.textContent = "La phase précédente est complète. Vous pouvez créer la phase suivante.";
-            nextBrassagePhaseMessage.className = 'mt-3 text-sm text-center text-green-500';
-        } else {
-            nextBrassagePhaseMessage.textContent = `Veuillez compléter tous les scores de la phase "${escapeHtml(lastBrassagePhase.name)}" pour créer la suivante.`;
-            nextBrassagePhaseMessage.className = 'mt-3 text-sm text-center text-red-500';
-        }
-    } else {
-        nextBrassagePhaseContainer.classList.add('hidden');
-    }
-}
-
 
 	// --- Fonctions de Gestion des Groupes Secondaires (à ajouter) ---
 
@@ -3179,58 +3171,89 @@ function deletePhaseById(phaseIdToDelete) {
     showToast(`La phase "${escapeHtml(phaseName)}" a été supprimée.`, "success");
 }
 
- function renderPools(pools, phaseName = "Poules Actuelles", phaseId = null, showRepeats = false) {
-        poolsDisplay.innerHTML = '';
-        currentPhaseTitle.textContent = 'Poules de ' + phaseName;
-        currentDisplayedPhaseId = phaseId;
+function renderPools(pools, phaseName = "Poules Actuelles", phaseId = null, showRepeats = false) {
+    const poolsDisplay = document.getElementById('poolsDisplay');
+    const currentPhaseTitle = document.getElementById('currentPhaseTitle');
+    const scoreCounter = document.getElementById('scoreCounter'); // On récupère le nouvel élément
+    if (!poolsDisplay || !currentPhaseTitle || !scoreCounter) return;
 
-        if (!pools || pools.length === 0) {
-            poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Aucune poule générée pour cette phase.</p>';
-            return;
+    // --- DÉBUT DE LA MODIFICATION ---
+    let totalMatches = 0;
+    let completedMatches = 0;
+    if (pools && Array.isArray(pools)) {
+        pools.forEach(pool => {
+            if (pool.matches && Array.isArray(pool.matches)) {
+                totalMatches += pool.matches.length;
+                pool.matches.forEach(match => {
+                    if (match.score1 !== null && match.score2 !== null && !isNaN(match.score1) && !isNaN(match.score2)) {
+                        completedMatches++;
+                    }
+                });
+            }
+        });
+    }
+
+    // On met à jour le titre principal (sans le compteur)
+    currentPhaseTitle.textContent = 'Poules de ' + phaseName;
+
+    // On met à jour le compteur de score séparément
+    if (totalMatches > 0) {
+        scoreCounter.textContent = `Scores saisis : ${completedMatches} / ${totalMatches}`;
+    } else {
+        scoreCounter.textContent = ''; // On vide le compteur s'il n'y a pas de match
+    }
+    // --- FIN DE LA MODIFICATION ---
+
+    currentDisplayedPhaseId = phaseId;
+    poolsDisplay.innerHTML = ''; // On vide les poules ici après avoir mis à jour les titres
+
+    if (!pools || pools.length === 0) {
+        poolsDisplay.innerHTML = '<p class="text-gray-500 text-center md:col-span-2">Aucune poule générée pour cette phase.</p>';
+        return;
+    }
+
+    // Le reste de la fonction qui affiche les poules et les matchs reste inchangé...
+    pools.forEach(pool => {
+        const poolCard = document.createElement('div');
+        poolCard.className = 'bg-white p-4 rounded-lg shadow-md border border-gray-200';
+        let teamsListHtml = pool.teams.map(team => {
+             const teamDetail = team.totalPoints !== undefined ? `Pts: ${team.totalPoints}, Diff: ${team.totalDiffScore}` : `Niveau ${team.level}`;
+             return `<li>${escapeHtml(team.name)} (${teamDetail})</li>`;
+        }).join('');
+        
+        let matchesHtml = '';
+        if (pool.matches && pool.matches.length > 0) {
+            matchesHtml = pool.matches.map((match, matchIndex) => {
+                let team1Class = 'text-gray-700';
+                let team2Class = 'text-gray-700';
+                if (match.winnerId === match.team1Id) {
+                    team1Class = 'font-bold text-green-700';
+                    team2Class = 'text-red-700';
+                } else if (match.winnerId === match.team2Id) {
+                    team2Class = 'font-bold text-green-700';
+                    team1Class = 'text-red-700';
+                }
+                const isRepeat = isMatchRepeated(match.team1Id, match.team2Id, phaseId);
+                const repeatIndicatorHtml = isRepeat ? `<button class="repeated-match-indicator-btn text-red-500 font-bold ml-2 text-sm focus:outline-none ${showRepeats ? '' : 'hidden'}" data-team1-id="${match.team1Id}" data-team2-id="${match.team2Id}" data-team1-name="${escapeHtml(match.team1Name)}" data-team2-name="${escapeHtml(match.team2Name)}">(Répété)</button>` : '';
+                return `
+                    <div class="flex flex-col sm:flex-row items-center justify-between p-2 border-b border-gray-200 last:border-b-0 space-y-2 sm:space-y-0 sm:space-x-2">
+                        <span data-team-role="team1-name" class="${team1Class} w-full sm:w-auto text-center sm:text-left">${escapeHtml(match.team1Name)}</span>
+                        <div class="flex items-center space-x-1">
+                            <select data-pool-id="${pool.id}" data-match-index="${matchIndex}" data-team="1" class="score-select w-20 p-1 border border-gray-300 rounded-md text-center text-sm">${generateScoreOptions(40, match.score1)}</select>
+                            <span class="text-gray-600">-</span>
+                            <select data-pool-id="${pool.id}" data-match-index="${matchIndex}" data-team="2" class="score-select w-20 p-1 border border-gray-300 rounded-md text-center text-sm">${generateScoreOptions(40, match.score2)}</select>
+                        </div>
+                        <span data-team-role="team2-name" class="${team2Class} w-full sm:w-auto text-center sm:text-right">${escapeHtml(match.team2Name)}</span>
+                        ${repeatIndicatorHtml}
+                    </div>`;
+            }).join('');
+        } else {
+            matchesHtml = '<p class="text-gray-500 text-sm mt-2">Aucune rencontre générée pour cette poule.</p>';
         }
 
-        pools.forEach(pool => {
-            const poolCard = document.createElement('div');
-            poolCard.className = 'bg-white p-4 rounded-lg shadow-md border border-gray-200';
-            let teamsListHtml = pool.teams.map(team => {
-                 const teamDetail = team.totalPoints !== undefined ? `Pts: ${team.totalPoints}, Diff: ${team.totalDiffScore}` : `Niveau ${team.level}`;
-                 return `<li>${escapeHtml(team.name)} (${teamDetail})</li>`;
-            }).join('');
-            
-            let matchesHtml = '';
-            if (pool.matches && pool.matches.length > 0) {
-                matchesHtml = pool.matches.map((match, matchIndex) => {
-                    let team1Class = 'text-gray-700';
-                    let team2Class = 'text-gray-700';
-                    if (match.winnerId === match.team1Id) {
-                        team1Class = 'font-bold text-green-700';
-                        team2Class = 'text-red-700';
-                    } else if (match.winnerId === match.team2Id) {
-                        team2Class = 'font-bold text-green-700';
-                        team1Class = 'text-red-700';
-                    }
-                    const isRepeat = isMatchRepeated(match.team1Id, match.team2Id, phaseId);
-                    const repeatIndicatorHtml = isRepeat ? `<button class="repeated-match-indicator-btn text-red-500 font-bold ml-2 text-sm focus:outline-none ${showRepeats ? '' : 'hidden'}" data-team1-id="${match.team1Id}" data-team2-id="${match.team2Id}" data-team1-name="${escapeHtml(match.team1Name)}" data-team2-name="${escapeHtml(match.team2Name)}">(Répété)</button>` : '';
-                    return `
-                        <div class="flex flex-col sm:flex-row items-center justify-between p-2 border-b border-gray-200 last:border-b-0 space-y-2 sm:space-y-0 sm:space-x-2">
-                            <span data-team-role="team1-name" class="${team1Class} w-full sm:w-auto text-center sm:text-left">${escapeHtml(match.team1Name)}</span>
-                            <div class="flex items-center space-x-1">
-                                <select data-pool-id="${pool.id}" data-match-index="${matchIndex}" data-team="1" class="score-select w-20 p-1 border border-gray-300 rounded-md text-center text-sm">${generateScoreOptions(40, match.score1)}</select>
-                                <span class="text-gray-600">-</span>
-                                <select data-pool-id="${pool.id}" data-match-index="${matchIndex}" data-team="2" class="score-select w-20 p-1 border border-gray-300 rounded-md text-center text-sm">${generateScoreOptions(40, match.score2)}</select>
-                            </div>
-                            <span data-team-role="team2-name" class="${team2Class} w-full sm:w-auto text-center sm:text-right">${escapeHtml(match.team2Name)}</span>
-                            ${repeatIndicatorHtml}
-                        </div>`;
-                }).join('');
-            } else {
-                matchesHtml = '<p class="text-gray-500 text-sm mt-2">Aucune rencontre générée pour cette poule.</p>';
-            }
-
-            poolCard.innerHTML = `<h3 class="text-xl font-semibold text-gray-800 mb-3">${escapeHtml(pool.name)}</h3><div class="mb-4"><h4 class="font-semibold text-gray-700 mb-2">Équipes:</h4><ul class="list-disc list-inside space-y-1 text-gray-700">${teamsListHtml}</ul></div><div class="mt-4 border-t border-gray-200 pt-4"><h4 class="font-semibold text-gray-700 mb-2">Rencontres:</h4>${matchesHtml}</div>`;
-            poolsDisplay.appendChild(poolCard);
-        });
-        
+        poolCard.innerHTML = `<h3 class="text-xl font-semibold text-gray-800 mb-3">${escapeHtml(pool.name)}</h3><div class="mb-4"><h4 class="font-semibold text-gray-700 mb-2">Équipes:</h4><ul class="list-disc list-inside space-y-1 text-gray-700">${teamsListHtml}</ul></div><div class="mt-4 border-t border-gray-200 pt-4"><h4 class="font-semibold text-gray-700 mb-2">Rencontres:</h4>${matchesHtml}</div>`;
+        poolsDisplay.appendChild(poolCard);
+    });
         // Attacher les écouteurs pour les scores
         poolsDisplay.querySelectorAll('.score-select').forEach(select => {
             select.addEventListener('change', (event) => {
@@ -3266,7 +3289,7 @@ function deletePhaseById(phaseIdToDelete) {
                 showRepeatedMatchDetailsModal(team1Name, team2Name, team1Id, team2Id, currentDisplayedPhaseId);
             });
         });
-    }
+}
 
     function renderPhaseHistory() {
         phaseHistoryDisplay.innerHTML = '';
@@ -3309,7 +3332,7 @@ function deletePhaseById(phaseIdToDelete) {
             });
         }
         updateRepeatedMatchesCountDisplay();
-        updateNextPhaseButtonVisibility();
+       
     }
 
     function renderBrassagesPage() {
@@ -3354,14 +3377,7 @@ function deletePhaseById(phaseIdToDelete) {
                         </button>
                     </div>
                 </div>
-                <p id="message" class="mt-3 text-sm text-center"></p>
-                <div id="nextBrassagePhaseContainer" class="mt-4 hidden text-center">
-                    <button id="createNextBrassagePhaseBtn"
-                            class="bg-purple-600 text-white py-2 px-4 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        Créer la phase de brassage suivante
-                    </button>
-                    <p id="nextBrassagePhaseMessage" class="mt-3 text-sm text-center"></p>
-                </div>
+                <p id="message" class="mt-3 text-sm text-center"></p>                
             </section>
 
             <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
@@ -3385,12 +3401,12 @@ function deletePhaseById(phaseIdToDelete) {
                 <p id="secondaryPreviewMessage" class="mt-3 text-sm text-center"></p>
 
                 <div id="secondaryGroupsPreviewDisplay" class="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    <p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Créez les groupes ici après avoir cliqué sur "Créer les groupes".</p>
+                    <p class="text-gray-500 text-center w-full md:col-span-2 lg:col-span-3">Gérez les groupes ici après avoir cliqué sur "Créer les groupes".</p>
                 </div>
                 <div class="flex justify-center mt-6">
                     <button id="refreshSecondaryGroupScoresBtn"
                             class="bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 shadow-md transition ease-in-out duration-150 hidden">
-                        Actualiser les Scores des Groupes Secondaires
+                        Actualiser les scores des groupes secondaires
                     </button>
                 </div>
 
@@ -3398,29 +3414,32 @@ function deletePhaseById(phaseIdToDelete) {
                 <div class="mt-6 text-center">
                     <button id="validateSecondaryGroupsBtn"
                             class="bg-purple-600 text-white py-2 px-4 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150 hidden">
-                        Valider et Enregistrer la Répartition des Groupes
+                        Valider la répartition des groupes pour la phase éliminatoire
                     </button>
                     <button id="generateSecondaryBrassagesBtn"
                             class="bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150 ml-2 hidden">
-                        Générer les Brassages des Groupes Secondaires
+                        Générer les brassages des groupes secondaires
                     </button>
                 </div>
             </section>
 
             <section class="mb-8 p-6 bg-gray-50 rounded-lg border border-gray-200">
-                <h2 class="text-2xl font-semibold text-gray-700 mb-4">4. Passer Directement à la Phase Éliminatoire (Optionnel)</h2>
+                <h2 class="text-2xl font-semibold text-gray-700 mb-4">4. Passer Directement à la Phase Éliminatoire (Si pas de brassage secondaire)</h2>
                 <p class="text-gray-600 mb-4">
-                    Si vous n'avez pas besoin de phases de brassage secondaires, vous pouvez valider les équipes
+                    Après avoir fini de saisir les scores des phases de brassage, si vous n'avez pas besoin de phases de brassage secondaires, vous pouvez valider les équipes
                     pour la phase éliminatoire en vous basant sur leur classement général actuel.
                     <br>
-                    **Attention :** Cette action écrasera toute configuration de groupes secondaires préalablement validée.
+                    <strong>Attention :</strong> Cette action écrasera toute configuration de groupes secondaires préalablement validée.
                 </p>
-                <div class="text-center">
-                    <button id="validateForDirectEliminationBtn"
-                            class="bg-purple-600 text-white py-2 px-6 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        Valider toutes les équipes pour l'élimination directe
-                    </button>
-                </div>
+                <div class="text-center flex justify-center items-center gap-4">
+					<button id="goToEliminationSelectionFromBrassageBtn"
+						class="bg-yellow-600 text-white py-2 px-4 rounded-md hover:bg-yellow-700 shadow-md transition ease-in-out duration-150">
+							Sélectionner des équipes à éliminer
+					</button>
+					<button id="validateForDirectEliminationBtn"
+						class="bg-purple-600 text-white py-2 px-6 rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
+						Valider les équipes pour la phase éliminatoire
+				</div>
                 <p id="directEliminationMessage" class="mt-3 text-sm text-center"></p>
             </section>
 
@@ -3443,8 +3462,11 @@ function deletePhaseById(phaseIdToDelete) {
             </section>
 
             <section class="p-6 bg-gray-50 rounded-lg border border-gray-200">
-                <h2 id="currentPhaseTitle" class="text-2xl font-semibold text-gray-700 mb-4">Poules de la Phase Actuelle</h2>
-                <div id="poolsDisplay" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+               <div class="flex justify-between items-center mb-4">
+				<h2 id="currentPhaseTitle" class="text-2xl font-semibold text-gray-700">Poules de la Phase Actuelle</h2>
+					<span id="scoreCounter" class="text-sm text-gray-600 font-medium"></span>
+				</div>
+				<div id="poolsDisplay" class="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <p class="text-gray-500 text-center md:col-span-2">Les poules de la phase sélectionnée s\'afficheront ici.</p>
                 </div>
             </section>
@@ -3463,7 +3485,6 @@ function deletePhaseById(phaseIdToDelete) {
     const currentPhaseTitle = document.getElementById('currentPhaseTitle');
     const basisInitialLevelsRadio = document.getElementById('basisInitialLevels');
     const basisPreviousResultsRadio = document.getElementById('basisPreviousResults');
-    const createNextBrassagePhaseBtn = document.getElementById('createNextBrassagePhaseBtn');
     const previewSecondaryGroupsBtn = document.getElementById('previewSecondaryGroupsBtn');
     const validateSecondaryGroupsBtn = document.getElementById('validateSecondaryGroupsBtn');
     const generateSecondaryBrassagesBtn = document.getElementById('generateSecondaryBrassagesBtn');
@@ -3471,6 +3492,7 @@ function deletePhaseById(phaseIdToDelete) {
     const validateForDirectEliminationBtn = document.getElementById('validateForDirectEliminationBtn');
     const toggleRepeatedMatchesDisplay = document.getElementById('toggleRepeatedMatchesDisplay');
     const secondaryGroupsPreviewDisplay = document.getElementById('secondaryGroupsPreviewDisplay');
+	const goToEliminationSelectionFromBrassageBtn = document.getElementById('goToEliminationSelectionFromBrassageBtn');
 
     // --- Fonctions d'affichage internes ---
 
@@ -3545,34 +3567,6 @@ function deletePhaseById(phaseIdToDelete) {
         }
     });
 
-    createNextBrassagePhaseBtn.addEventListener('click', () => {
-    
-    // Vérifier que la dernière phase est bien terminée
-    const initialOrSecondaryPhases = allBrassagePhases.filter(p => p.type === PHASE_TYPE_INITIAL || p.type === PHASE_TYPE_SECONDARY_BRASSAGE).sort((a,b) => a.timestamp - b.timestamp);
-    const lastBrassagePhase = initialOrSecondaryPhases[initialOrSecondaryPhases.length - 1];
-    if (!lastBrassagePhase || !isBrassagePhaseComplete(lastBrassagePhase)) {
-        showToast(`Veuillez compléter tous les scores de la phase "${escapeHtml(lastBrassagePhase ? lastBrassagePhase.name : 'précédente')}"`, "error");
-        return;
-    }
-
-    // Créer la nouvelle phase
-    const nextPhaseNumber = initialOrSecondaryPhases.length + 1;
-    const newPhase = {
-        id: `${PHASE_TYPE_INITIAL}_${Date.now()}_${nextPhaseNumber}`,
-        type: PHASE_TYPE_INITIAL,
-        name: `Phase Globale ${nextPhaseNumber}`,
-        pools: [],
-        generated: false,
-        timestamp: Date.now()
-    };
-    allBrassagePhases.push(newPhase);
-
-    // Sauvegarder et rafraîchir l'interface
-    saveAllData();
-    renderPhaseHistory();
-    showToast(`Phase Globale ${nextPhaseNumber} créée !`, "success");
-	});
-	
     previewSecondaryGroupsBtn.addEventListener('click', previewSecondaryGroupsWithWarning);
     validateSecondaryGroupsBtn.addEventListener('click', validateSecondaryGroupsForElimination);
 
@@ -3593,6 +3587,10 @@ function deletePhaseById(phaseIdToDelete) {
             }
         }
     });
+	
+	goToEliminationSelectionFromBrassageBtn.addEventListener('click', () => {
+    window.location.hash = '#elimination-selection';
+	});
 
     // --- Initialisation de la page ---
     renderPhaseHistory();
@@ -3726,7 +3724,7 @@ function deletePhaseById(phaseIdToDelete) {
             });
             saveAllData(); // Sauve les données (localement en mode invité, Firestore si connecté)
             showToast("Sélection des équipes éliminées sauvegardée !", "success");
-            window.location.hash = '#eliminatoires';
+            window.history.back();
         });
 
         renderTeamsForEliminationSelection();
@@ -3746,7 +3744,7 @@ function deletePhaseById(phaseIdToDelete) {
                 <div class="flex flex-col sm:flex-row justify-center gap-4 mt-6">
                     <button id="goToEliminationSelectionBtn"
                             class="bg-yellow-600 text-white py-2 px-4 rounded-md hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        Sélectionner les équipes à éliminer
+                        Sélectionner des équipes à éliminer
                     </button>
                     <button id="generateEliminationPhasesBtn"
                             class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
