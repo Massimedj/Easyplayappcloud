@@ -3738,11 +3738,11 @@ function renderPools(pools, phaseName = "Poules Actuelles", phaseId = null, show
                     </button>
                     <button id="generateEliminationPhasesBtn"
                             class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        Générer les Phases Éliminatoires
+                        Générer les phases éliminatoires
                     </button>
                     <button id="resetAllEliminationPhasesBtn"
                             class="bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 shadow-md transition ease-in-out duration-150">
-                        Réinitialiser toutes les Phases
+                        Réinitialiser toutes les phases éliminatoires
                     </button>
                 </div>
                 <p id="eliminationMessage" class="mt-3 text-sm text-center"></p>
